@@ -1,0 +1,6 @@
+{
+  "name": "inotify",
+  "version": "1.0.0-stub",
+  "description": "Windows stub for inotify (file watcher used on Linux only)",
+  "main": "index.js"
+}

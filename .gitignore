@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+*.egg-info/
+.pytest_cache/
+
+# Node / npm
+node_modules/
+npm-debug.log*
+
+# Build / archives
+*.zip
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project storage (optional: uncomment to ignore DB/logs)
+# free_quant_scalping_ai/storage/
