@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NIFTY AI Prediction Dashboard</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <header>
+    <h1>NIFTY AI Prediction Dashboard</h1>
+  </header>
+
+  <main class="main-grid">
+    <section class="panel price-chart-panel">
+      <h2>NIFTY 5m Price & Signals</h2>
+      <div class="chart-container">
+        <canvas id="priceChart"></canvas>
+      </div>
+    </section>
+
+    <aside class="right-panel">
+      <section class="panel prediction-card">
+        <h2>Current Prediction</h2>
+        <div class="spot-price" id="spotPrice">--</div>
+        <div class="signal buy" id="signalEl">HOLD</div>
+        <div class="confidence-gauge-wrap">
+          <div class="label">Confidence</div>
+          <div class="confidence-bar">
+            <div class="confidence-fill hold" id="confidenceFill" style="width: 0%"></div>
+          </div>
+          <div class="confidence-value" id="confidenceValue">0%</div>
+        </div>
+        <div class="last-update" id="lastUpdate"></div>
+      </section>
+
+      <section class="panel options-panel">
+        <h2>Options Suggestion</h2>
+        <div class="option-row">
+          <div class="option-name" id="suggestedOptionAtm">ATM: --</div>
+        </div>
+        <div class="option-row">
+          <div class="option-name" id="suggestedOptionItm">ITM: --</div>
+        </div>
+        <div class="option-row">
+          <div class="option-name" id="suggestedOptionOtm">OTM: --</div>
+        </div>
+        <div class="option-row">
+          <div class="option-confidence" id="optionConfidence">Confidence: --</div>
+        </div>
+      </section>
+    </aside>
+
+    <section class="panel signal-table-panel">
+      <h2>Signal History</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Spot Price</th>
+              <th>Signal</th>
+              <th>Confidence</th>
+              <th>Suggested Option</th>
+            </tr>
+          </thead>
+          <tbody id="signalTableBody">
+            <tr><td colspan="5" class="loading">Loading...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel model-stats-panel">
+      <h2>Model Analytics</h2>
+      <div class="model-metrics">
+        <div class="metric-row">
+          <span class="metric-label">Accuracy</span>
+          <span class="metric-value" id="modelAccuracy">--</span>
+        </div>
+        <div class="metric-row">
+          <span class="metric-label">Precision (macro)</span>
+          <span class="metric-value" id="modelPrecision">--</span>
+        </div>
+      </div>
+      <div class="chart-container">
+        <canvas id="confidenceHistChart"></canvas>
+      </div>
+      <div class="chart-container">
+        <canvas id="featureImportanceChart"></canvas>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/dashboard.js"></script>
+  <script src="/static/charts.js"></script>
+</body>
+</html>

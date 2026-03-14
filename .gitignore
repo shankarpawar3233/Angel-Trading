@@ -26,5 +26,8 @@ build/
 .DS_Store
 Thumbs.db
 
-# Project storage (optional: uncomment to ignore DB/logs)
-# free_quant_scalping_ai/storage/
+# Project storage (DB, logs, cached data)
+free_quant_scalping_ai/storage/
+**/storage/*.sqlite
+**/storage/logs/
+**/logs/
