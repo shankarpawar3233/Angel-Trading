@@ -90,6 +90,19 @@ def init_schema() -> None:
         """
         )
 
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS regime_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT NOT NULL,
+                ts DATETIME NOT NULL,
+                regime TEXT NOT NULL,
+                confidence REAL,
+                payload_json TEXT
+            );
+        """
+        )
+
         conn.commit()
         logger.info("SQLite schema initialized at %s", DB_PATH)
 
@@ -209,8 +222,22 @@ def latest_option_chain(symbol: str) -> pd.DataFrame:
     return df
 
 
+def store_regime(symbol: str, ts, regime: str, confidence: float | None, payload_json: str | None = None) -> None:
+    """Store market regime snapshot for history."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO regime_history (symbol, ts, regime, confidence, payload_json)
+            VALUES (?, ?, ?, ?, ?)
+        """,
+            (symbol, ts, regime, confidence, payload_json or "{}"),
+        )
+        conn.commit()
+
+
 def store_signal(
-    symbol: str, ts, category: Literal["scalping", "hero_zero", "institutional", "gamma", "expiry", "combined"], payload_json: str
+    symbol: str, ts, category: Literal["scalping", "hero_zero", "institutional", "gamma", "expiry", "combined", "regime"], payload_json: str
 ) -> None:
     with get_connection() as conn:
         cursor = conn.cursor()

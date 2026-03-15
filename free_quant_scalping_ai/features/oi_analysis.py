@@ -69,11 +69,19 @@ def compute_oi_analysis(
         max_oi_put = None
 
     # Volume spike: volume > multiplier * rolling mean (or mean)
+    volume_spikes: List[Dict[str, Any]] = []
     if "volume" in df.columns:
         vol_mean = df["volume"].mean()
         if pd.isna(vol_mean) or vol_mean == 0:
             vol_mean = 1.0
         df["vol_spike"] = df["volume"] > (volume_spike_multiplier * vol_mean)
+        for _, row in df[df["vol_spike"]].iterrows():
+            volume_spikes.append({
+                "strike": float(row["strike"]),
+                "option_type": str(row["option_type"]),
+                "volume": float(row["volume"]) if pd.notna(row["volume"]) else None,
+                "ltp": float(row["ltp"]) if "ltp" in row and pd.notna(row.get("ltp")) else None,
+            })
     else:
         df["vol_spike"] = False
 
@@ -103,7 +111,10 @@ def compute_oi_analysis(
         "pcr": round(pcr, 4),
         "max_oi_call": max_oi_call,
         "max_oi_put": max_oi_put,
+        "max_call_oi_strike": max_oi_call,
+        "max_put_oi_strike": max_oi_put,
         "oi_spikes": oi_spikes[:20],
+        "volume_spikes": volume_spikes[:20],
         "ce_oi_total": ce_oi,
         "pe_oi_total": pe_oi,
     }

@@ -21,6 +21,67 @@ logger = get_logger(__name__)
 NFO_EXCHANGE_TYPE = 2
 
 
+def discover_nifty_options(
+    index_price: Optional[float] = None,
+    atm_band: int = 20,
+) -> List[Dict[str, Any]]:
+    """
+    Discover NIFTY option contracts from Angel instrument master.
+
+    Filter: exch_seg == "NFO", name == "NIFTY" (or symbol contains "NIFTY"),
+    instrumenttype == "OPTIDX".
+
+    Returns list of {"symbol", "token", "strike", "expiry", "option_type"}.
+    If index_price is set, restricts to ATM ± atm_band strikes (CE and PE).
+    """
+    instruments = load_instruments()
+    option_contracts: List[Dict[str, Any]] = []
+
+    for inst in instruments:
+        exch = str(inst.get("exch_seg", "")).upper()
+        if exch != "NFO":
+            continue
+        itype = str(inst.get("instrumenttype", "")).upper()
+        if itype != "OPTIDX":
+            continue
+        name = str(inst.get("name", "")).upper()
+        sym = str(inst.get("symbol", "")).upper()
+        if "NIFTY" not in name and "NIFTY" not in sym:
+            continue
+
+        parsed = _parse_option_symbol(sym)
+        if not parsed:
+            continue
+        strike, option_type = parsed
+        token = inst.get("token")
+        if not token:
+            continue
+        expiry = _parse_expiry_from_symbol(sym)
+        option_contracts.append({
+            "symbol": inst.get("symbol", sym),
+            "token": str(token),
+            "strike": strike,
+            "expiry": expiry,
+            "option_type": option_type,
+        })
+
+    option_contracts.sort(key=lambda x: (x["strike"], x["option_type"]))
+
+    if index_price is not None and option_contracts:
+        strikes_seen = sorted({c["strike"] for c in option_contracts})
+        if strikes_seen:
+            step = 50.0 if strikes_seen[0] > 1000 else 100.0
+            if len(strikes_seen) > 1:
+                step = min(abs(strikes_seen[i + 1] - strikes_seen[i]) for i in range(len(strikes_seen) - 1))
+            atm = round(index_price / step) * step
+            low = atm - atm_band * step
+            high = atm + atm_band * step
+            option_contracts = [c for c in option_contracts if low <= c["strike"] <= high]
+
+    logger.info("[OPTIONS] discover_nifty_options: %s contracts (ATM±%s)", len(option_contracts), atm_band)
+    return option_contracts
+
+
 def _parse_option_symbol(symbol: str) -> Optional[Tuple[float, str]]:
     """
     Parse NIFTY option symbol to extract strike and option_type (CE/PE).
@@ -129,16 +190,19 @@ def discover_nifty_option_tokens(
 def get_subscription_tokens(
     index_price: Optional[float] = None,
     atm_band: int = 20,
-    max_tokens: int = 200,
+    max_tokens: int = 500,
 ) -> List[Dict[str, str]]:
     """
     Return a list of {symbol, token} for WebSocket subscription.
-
+    Uses discover_nifty_options (NFO, name NIFTY, OPTIDX) then ATM ± atm_band strikes.
     Example: [{"symbol": "NIFTY24MAR23150CE", "token": "12345"}, ...]
     """
-    contracts = discover_nifty_option_tokens(
-        index_price=index_price,
-        atm_band=atm_band,
-        max_contracts=max_tokens // 2,
-    )
-    return [{"symbol": c["symbol"], "token": c["token"]} for c in contracts]
+    contracts = discover_nifty_options(index_price=index_price, atm_band=atm_band)
+    if not contracts:
+        contracts = discover_nifty_option_tokens(
+            index_price=index_price,
+            atm_band=atm_band,
+            max_contracts=max_tokens // 2,
+        )
+    out = [{"symbol": c["symbol"], "token": c["token"]} for c in contracts[:max_tokens]]
+    return out

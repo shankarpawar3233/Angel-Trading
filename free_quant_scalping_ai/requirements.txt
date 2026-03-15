@@ -24,3 +24,4 @@ smartapi-python
 websocket-client
 logzero
 pyotp
+hmmlearn>=0.3.0

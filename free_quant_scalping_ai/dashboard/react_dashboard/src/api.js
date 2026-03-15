@@ -23,3 +23,45 @@ export async function fetchOi() {
   if (!res.ok) return {};
   return res.json();
 }
+
+export async function fetchCandles(symbol = 'NIFTY', timeframe = '5m', limit = 200) {
+  const res = await fetch(`${API_BASE}/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&limit=${limit}`);
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function fetchMarketRegime() {
+  const res = await fetch(`${API_BASE}/market-regime`);
+  if (!res.ok) return { market_regime: {} };
+  return res.json();
+}
+
+export async function fetchLiquidityMap() {
+  const res = await fetch(`${API_BASE}/liquidity-map`);
+  if (!res.ok) return { liquidity_map: {} };
+  return res.json();
+}
+
+export async function fetchStopHunts() {
+  const res = await fetch(`${API_BASE}/stop-hunts`);
+  if (!res.ok) return { stop_hunts: {} };
+  return res.json();
+}
+
+export async function fetchGammaExposure() {
+  const res = await fetch(`${API_BASE}/gamma-exposure`);
+  if (!res.ok) return {};
+  return res.json();
+}
+
+export async function fetchMaxPain() {
+  const res = await fetch(`${API_BASE}/max-pain`);
+  if (!res.ok) return {};
+  return res.json();
+}
+
+export async function fetchFinalSignal() {
+  const res = await fetch(`${API_BASE}/final-signal`);
+  if (!res.ok) return { final_signal: {} };
+  return res.json();
+}

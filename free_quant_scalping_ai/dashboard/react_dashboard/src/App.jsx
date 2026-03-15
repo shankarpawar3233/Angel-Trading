@@ -1,5 +1,20 @@
-import { useState, useEffect } from 'react'
-import { fetchMarket, fetchSignals, fetchOptionChain, fetchOi } from './api'
+import { useState, useEffect, useRef } from 'react'
+import {
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  BarElement,
+  LineElement,
+  PointElement,
+  Title,
+  Tooltip,
+  Legend,
+} from 'chart.js'
+import { Bar, Line } from 'react-chartjs-2'
+import { createChart } from 'lightweight-charts'
+import { fetchMarket, fetchSignals, fetchOptionChain, fetchOi, fetchCandles, fetchMarketRegime, fetchLiquidityMap, fetchStopHunts, fetchFinalSignal } from './api'
+
+ChartJS.register(CategoryScale, LinearScale, BarElement, LineElement, PointElement, Title, Tooltip, Legend)
 
 function LiveBadge() {
   return (
@@ -36,7 +51,7 @@ function MarketStrip({ market }) {
   )
 }
 
-function ScalpingCard({ symbol, scalping }) {
+function ScalpingCard({ symbol, scalping, onPlaceOrder }) {
   if (!scalping) return null
   const isCe = (scalping.trade || '').toUpperCase().includes('CE')
   return (
@@ -57,8 +72,19 @@ function ScalpingCard({ symbol, scalping }) {
         <span className="text-slate-500">SL</span>
         <span className="text-red-400">{scalping.stoploss != null ? scalping.stoploss : '–'}</span>
       </div>
-      <div className="mt-2 text-xs text-slate-400">
-        Confidence: <span className="text-slate-200">{scalping.confidence != null ? Math.round(scalping.confidence) : 0}%</span>
+      <div className="mt-2 flex items-center justify-between">
+        <span className="text-xs text-slate-400">
+          Confidence: <span className="text-slate-200">{scalping.confidence != null ? Math.round(scalping.confidence) : 0}%</span>
+        </span>
+        {onPlaceOrder && (
+          <button
+            type="button"
+            onClick={() => onPlaceOrder(symbol, scalping)}
+            className="text-xs px-2 py-1 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 hover:bg-emerald-500/30"
+          >
+            Place order
+          </button>
+        )}
       </div>
     </div>
   )
@@ -105,28 +131,74 @@ function GammaExpiry({ gamma, expiry }) {
   )
 }
 
-function OptionChainHeatmap({ chain }) {
-  if (!chain || typeof chain !== 'object') return <div className="text-slate-500 text-sm">No option chain data</div>
-  const entries = Object.entries(chain).filter(([, v]) => v && (v.ltp != null || v.oi != null))
-  if (entries.length === 0) return <div className="text-slate-500 text-sm">No option chain data</div>
-  const maxOi = Math.max(...entries.map(([, v]) => Number(v.oi) || 0), 1)
+function OptionChainHeatmap({ optionChainData }) {
+  const chain = optionChainData?.chain || optionChainData
+  const analytics = optionChainData?.analytics || {}
+  const heroZeroStrikes = optionChainData?.hero_zero_strikes || []
+  const maxCallOi = analytics?.max_call_oi
+  const maxPutOi = analytics?.max_put_oi
+
+  if (!chain || typeof chain !== 'object') return <div className="text-slate-500 text-sm">No option chain data (Angel stream)</div>
+  const strikes = Object.keys(chain).filter(k => /^\d+$/.test(k)).map(Number).sort((a, b) => a - b)
+  if (strikes.length === 0) return <div className="text-slate-500 text-sm">No option chain data</div>
+
+  const fmt = (v) => (v != null && v !== '') ? Number(v).toFixed(1) : '–'
+  const fmtInt = (v) => (v != null && v !== '') ? Number(v).toLocaleString() : '–'
+
   return (
-    <div className="grid grid-cols-4 sm:grid-cols-6 gap-1 text-xs font-mono max-h-48 overflow-auto">
-      {entries.slice(0, 48).map(([key, v]) => {
-        const pct = maxOi ? ((Number(v.oi) || 0) / maxOi) * 100 : 0
-        const isCe = key.endsWith('CE')
-        return (
-          <div
-            key={key}
-            className={`rounded p-1.5 ${isCe ? 'bg-cyan-500/20 text-cyan-300' : 'bg-amber-500/20 text-amber-300'}`}
-            style={{ opacity: 0.5 + (pct / 100) * 0.5 }}
-            title={`${key} LTP: ${v.ltp ?? '–'} OI: ${v.oi ?? '–'}`}
-          >
-            <div className="truncate">{key}</div>
-            <div className="text-slate-400">{v.ltp != null ? Number(v.ltp).toFixed(1) : '–'}</div>
-          </div>
-        )
-      })}
+    <div className="space-y-2">
+      {(analytics.pcr != null || maxCallOi != null || maxPutOi != null) && (
+        <div className="flex flex-wrap gap-4 text-xs font-mono text-slate-400 mb-2">
+          {analytics.pcr != null && <span>PCR: <span className="text-slate-200">{Number(analytics.pcr).toFixed(3)}</span></span>}
+          {maxCallOi != null && <span>Max OI CE: <span className="text-cyan-400">{maxCallOi}</span></span>}
+          {maxPutOi != null && <span>Max OI PE: <span className="text-amber-400">{maxPutOi}</span></span>}
+        </div>
+      )}
+      <div className="overflow-auto max-h-64 border border-slate-700 rounded-lg">
+        <table className="w-full text-xs font-mono border-collapse">
+          <thead className="bg-slate-800/80 sticky top-0">
+            <tr>
+              <th className="text-left p-2 text-slate-400 font-semibold">Strike</th>
+              <th className="text-right p-2 text-cyan-400">CE LTP</th>
+              <th className="text-right p-2 text-cyan-400">CE Vol</th>
+              <th className="text-right p-2 text-cyan-400">CE OI</th>
+              <th className="text-right p-2 text-amber-400">PE LTP</th>
+              <th className="text-right p-2 text-amber-400">PE Vol</th>
+              <th className="text-right p-2 text-amber-400">PE OI</th>
+            </tr>
+          </thead>
+          <tbody>
+            {strikes.map((strike) => {
+              const row = chain[String(strike)] || {}
+              const ce = row.CE || {}
+              const pe = row.PE || {}
+              const isHero = heroZeroStrikes.includes(Number(strike))
+              const isMaxCallOi = maxCallOi != null && strike === Number(maxCallOi)
+              const isMaxPutOi = maxPutOi != null && strike === Number(maxPutOi)
+              const highOI = isMaxCallOi || isMaxPutOi
+              const rowClass = isHero
+                ? 'bg-violet-500/15 border-l-2 border-violet-400'
+                : highOI
+                  ? 'bg-slate-700/40'
+                  : ''
+              return (
+                <tr key={strike} className={`border-t border-slate-700/50 ${rowClass}`}>
+                  <td className="p-2 text-slate-200 font-medium">
+                    {strike}
+                    {isHero && <span className="ml-1 text-violet-400" title="Hero-Zero">●</span>}
+                  </td>
+                  <td className="p-2 text-right text-cyan-300">{fmt(ce.ltp)}</td>
+                  <td className="p-2 text-right text-slate-400">{fmtInt(ce.volume)}</td>
+                  <td className="p-2 text-right text-slate-300">{fmtInt(ce.oi)}{isMaxCallOi && <span className="text-cyan-400 ml-0.5">↑</span>}</td>
+                  <td className="p-2 text-right text-amber-300">{fmt(pe.ltp)}</td>
+                  <td className="p-2 text-right text-slate-400">{fmtInt(pe.volume)}</td>
+                  <td className="p-2 text-right text-slate-300">{fmtInt(pe.oi)}{isMaxPutOi && <span className="text-amber-400 ml-0.5">↑</span>}</td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }
@@ -148,27 +220,327 @@ function OiAnalysis({ oi }) {
   )
 }
 
+function GammaExposureChart({ gammaLevels }) {
+  const levels = gammaLevels?.gamma_levels || []
+  const wallCall = gammaLevels?.gamma_wall_call
+  const wallPut = gammaLevels?.gamma_wall_put
+  const flip = gammaLevels?.gamma_flip
+  if (!levels.length) return <div className="text-slate-500 text-sm py-8">No gamma exposure data</div>
+  const labels = levels.map((l) => String(l.strike))
+  const data = levels.map((l) => l.gamma)
+  const colors = data.map((g) => (g >= 0 ? 'rgba(34, 211, 238, 0.7)' : 'rgba(251, 191, 36, 0.7)'))
+  const chartData = {
+    labels,
+    datasets: [{ label: 'Gamma', data, backgroundColor: colors, borderColor: colors.map((c) => c.replace('0.7', '1')), borderWidth: 1 }],
+  }
+  const options = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: { display: false },
+      tooltip: { callbacks: { label: (ctx) => `Strike ${ctx.label}: ${Number(ctx.raw).toLocaleString()}` } },
+    },
+    scales: {
+      x: { ticks: { color: '#94a3b8', maxRotation: 45 } },
+      y: { ticks: { color: '#94a3b8' } },
+    },
+  }
+  return (
+    <div className="space-y-2">
+      <div className="h-48">
+        <Bar data={chartData} options={options} />
+      </div>
+      <div className="flex flex-wrap gap-3 text-xs font-mono text-slate-400">
+        {wallCall != null && <span>Resistance (call wall): <span className="text-cyan-400">{wallCall}</span></span>}
+        {wallPut != null && <span>Support (put wall): <span className="text-amber-400">{wallPut}</span></span>}
+        {flip != null && <span>Gamma flip: <span className="text-slate-200">{flip}</span></span>}
+      </div>
+    </div>
+  )
+}
+
+function MaxPainIndicator({ maxPain, spot }) {
+  if (maxPain == null) return <div className="text-slate-500 text-sm">No max pain data</div>
+  const diff = spot != null ? spot - maxPain : null
+  return (
+    <div className="space-y-1">
+      <div className="font-mono text-2xl font-bold text-white">{Number(maxPain).toLocaleString()}</div>
+      {diff != null && (
+        <div className="text-xs text-slate-400">
+          Spot {diff >= 0 ? 'above' : 'below'} max pain by <span className="text-slate-200">{Math.abs(diff).toFixed(0)}</span> pts
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ExpiryBiasIndicator({ bias, expectedRange }) {
+  if (!bias && (!expectedRange || !expectedRange.length)) return <div className="text-slate-500 text-sm">No expiry bias</div>
+  const color = bias === 'BULLISH' ? 'text-emerald-400' : bias === 'BEARISH' ? 'text-red-400' : 'text-slate-300'
+  return (
+    <div className="space-y-1">
+      <div className={`font-mono font-semibold ${color}`}>{bias || '–'}</div>
+      {expectedRange?.length >= 2 && (
+        <div className="text-xs text-slate-400">
+          Range: <span className="text-slate-200">{Number(expectedRange[0]).toLocaleString()} – {Number(expectedRange[1]).toLocaleString()}</span>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function MarketRegimeIndicator({ regime, confidence }) {
+  if (!regime) return <div className="text-slate-500 text-sm">No regime data</div>
+  const colors = { TREND_UP: 'text-emerald-400', TREND_DOWN: 'text-red-400', RANGE: 'text-slate-300', VOLATILE: 'text-amber-400' }
+  const color = colors[regime] || 'text-slate-300'
+  return (
+    <div className="space-y-1">
+      <div className={`font-mono font-semibold ${color}`}>{regime}</div>
+      {confidence != null && <div className="text-xs text-slate-400">Confidence: <span className="text-slate-200">{confidence}%</span></div>}
+    </div>
+  )
+}
+
+function LiquidityMapPanel({ liquidityMap }) {
+  const heatmap = liquidityMap?.heatmap || []
+  const support = liquidityMap?.support_zones || []
+  const resistance = liquidityMap?.resistance_zones || []
+  const stops = liquidityMap?.stop_loss_clusters || []
+  if (!heatmap.length && !support.length && !resistance.length) return <div className="text-slate-500 text-sm">No liquidity map data</div>
+  return (
+    <div className="space-y-3 text-sm font-mono">
+      {support.length > 0 && (
+        <div>
+          <span className="text-slate-500">Support: </span>
+          <span className="text-emerald-400">{support.slice(0, 5).map((z) => z.strike).join(', ')}</span>
+        </div>
+      )}
+      {resistance.length > 0 && (
+        <div>
+          <span className="text-slate-500">Resistance: </span>
+          <span className="text-amber-400">{resistance.slice(0, 5).map((z) => z.strike).join(', ')}</span>
+        </div>
+      )}
+      {stops.length > 0 && (
+        <div>
+          <span className="text-slate-500">Stop clusters: </span>
+          <span className="text-slate-300">{stops.slice(0, 5).map((s) => s.strike).join(', ')}</span>
+        </div>
+      )}
+      {heatmap.length > 0 && (
+        <div className="text-xs text-slate-500">Top liquidity: {heatmap.slice(0, 5).map((h) => `${h.strike}(${Number(h.score).toFixed(2)})`).join(', ')}</div>
+      )}
+    </div>
+  )
+}
+
+function StopHuntPanel({ stopHunt }) {
+  if (!stopHunt?.detected) return <div className="text-slate-500 text-sm">No stop-hunt detected</div>
+  const z = stopHunt.stop_hunt_zone
+  if (!z) return null
+  const color = z.type === 'RESISTANCE' ? 'text-amber-400' : 'text-emerald-400'
+  return (
+    <div className="space-y-1 font-mono text-sm">
+      <div className={color}>{z.type} @ {z.level}</div>
+      <div className="text-xs text-slate-400">Reversal price: {z.reversal_price}</div>
+    </div>
+  )
+}
+
+function FinalSignalCard({ finalSignal }) {
+  if (!finalSignal || !Object.keys(finalSignal).length) return <div className="text-slate-500 text-sm">No final signal</div>
+  const entries = Object.entries(finalSignal)
+  return (
+    <div className="space-y-2">
+      {entries.map(([symbol, s]) => (
+        <div key={symbol} className="rounded border border-slate-700 bg-slate-800/40 p-3 font-mono text-sm">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-slate-400">{symbol}</span>
+            <span className="text-white font-bold">{s?.price != null ? Number(s.price).toLocaleString() : '–'}</span>
+          </div>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+            <span className="text-slate-500">Regime</span><span className="text-slate-200">{s?.regime ?? '–'}</span>
+            <span className="text-slate-500">Trade</span><span className={s?.trade === 'BUY_CE' ? 'text-cyan-400' : s?.trade === 'BUY_PE' ? 'text-amber-400' : 'text-slate-400'}>{s?.trade ?? '–'}</span>
+            <span className="text-slate-500">Confidence</span><span className="text-slate-200">{s?.confidence != null ? `${s.confidence}%` : '–'}</span>
+            <span className="text-slate-500">Gamma wall</span><span className="text-slate-200">{s?.gamma_wall ?? '–'}</span>
+            <span className="text-slate-500">Max pain</span><span className="text-slate-200">{s?.max_pain ?? '–'}</span>
+            <span className="text-slate-500">Flow</span><span className="text-slate-200">{s?.institutional_flow ?? '–'}</span>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function NiftyCandleChart({ candles, timeframe, onTimeframeChange }) {
+  const chartRef = useRef(null)
+  const chartInstance = useRef(null)
+
+  useEffect(() => {
+    if (!chartRef.current || !candles || candles.length === 0) return
+    const container = chartRef.current
+    if (chartInstance.current) {
+      chartInstance.current.remove()
+      chartInstance.current = null
+    }
+    const chart = createChart(container, {
+      layout: {
+        background: { color: '#0f172a' },
+        textColor: '#94a3b8',
+      },
+      grid: {
+        vertLines: { color: '#334155' },
+        horzLines: { color: '#334155' },
+      },
+      width: container.clientWidth,
+      height: 320,
+      timeScale: {
+        timeVisible: true,
+        secondsVisible: false,
+        borderColor: '#475569',
+      },
+      rightPriceScale: {
+        borderColor: '#475569',
+        scaleMargins: { top: 0.1, bottom: 0.2 },
+      },
+    })
+    const candleSeries = chart.addCandlestickSeries({
+      upColor: '#22d3ee',
+      downColor: '#f59e0b',
+      borderUpColor: '#22d3ee',
+      borderDownColor: '#f59e0b',
+      wickUpColor: '#22d3ee',
+      wickDownColor: '#f59e0b',
+    })
+    const data = candles.map((c) => ({
+      time: c.time,
+      open: c.open,
+      high: c.high,
+      low: c.low,
+      close: c.close,
+    }))
+    candleSeries.setData(data)
+    chart.timeScale().fitContent()
+    chartInstance.current = chart
+    const handleResize = () => {
+      if (chartInstance.current) chartInstance.current.applyOptions({ width: container.clientWidth })
+    }
+    window.addEventListener('resize', handleResize)
+    return () => {
+      window.removeEventListener('resize', handleResize)
+      if (chartInstance.current) {
+        chartInstance.current.remove()
+        chartInstance.current = null
+      }
+    }
+  }, [candles])
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <div className="flex gap-1">
+          {['1m', '5m', '15m', '1d'].map((tf) => (
+            <button
+              key={tf}
+              type="button"
+              onClick={() => onTimeframeChange && onTimeframeChange(tf)}
+              className={`px-2 py-1 text-xs font-mono rounded ${timeframe === tf ? 'bg-cyan-500/30 text-cyan-300 border border-cyan-500/50' : 'text-slate-400 hover:text-slate-200 border border-slate-600'}`}
+            >
+              {tf}
+            </button>
+          ))}
+        </div>
+        <span className="text-xs text-slate-500">NIFTY • Candles (Angel One style)</span>
+      </div>
+      <div ref={chartRef} className="rounded-lg overflow-hidden min-h-[320px]" />
+      {(!candles || candles.length === 0) && (
+        <div className="flex items-center justify-center py-8 text-slate-500 text-sm">Loading candles… (ensure backend has candle data)</div>
+      )}
+    </div>
+  )
+}
+
+function PlacedOrders({ orders, onExit }) {
+  const list = orders || []
+  if (!list.length) return <div className="text-slate-500 text-sm">No placed orders yet (paper).</div>
+  return (
+    <div className="space-y-2">
+      {list.map((o) => (
+        <div key={o.id} className="rounded border border-slate-700 bg-slate-950/40 p-3 flex items-center justify-between">
+          <div className="font-mono text-sm">
+            <div className="text-slate-200 font-semibold">{o.symbol} {o.trade} {o.strike}</div>
+            <div className="text-slate-400 text-xs">Entry: {o.entry ?? '–'} | Target: {o.target ?? '–'} | SL: {o.stoploss ?? '–'}</div>
+            <div className="text-slate-500 text-xs">Placed: {o.placedAt}</div>
+          </div>
+          <button
+            type="button"
+            onClick={() => onExit(o.id)}
+            className="text-xs px-2 py-1 rounded bg-red-500/15 text-red-300 border border-red-500/30 hover:bg-red-500/25"
+          >
+            Exit
+          </button>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 export default function App() {
   const [market, setMarket] = useState({})
   const [signals, setSignals] = useState({})
   const [optionChain, setOptionChain] = useState({})
   const [oi, setOi] = useState({})
+  const [candles, setCandles] = useState([])
+  const [candleTimeframe, setCandleTimeframe] = useState('5m')
+  const [orders, setOrders] = useState([])
   const [error, setError] = useState(null)
   const [lastUpdate, setLastUpdate] = useState(null)
   const [modelVersion, setModelVersion] = useState(null)
+  const [marketRegime, setMarketRegime] = useState({})
+  const [liquidityMap, setLiquidityMap] = useState({})
+  const [stopHunts, setStopHunts] = useState({})
+  const [finalSignal, setFinalSignal] = useState({})
+
+  const placeOrder = (symbol, scalping) => {
+    const o = {
+      id: `${Date.now()}_${Math.random().toString(16).slice(2)}`,
+      symbol,
+      trade: scalping?.trade || '–',
+      strike: scalping?.strike || '–',
+      entry: scalping?.entry,
+      target: scalping?.target,
+      stoploss: scalping?.stoploss,
+      placedAt: new Date().toLocaleTimeString(),
+    }
+    setOrders((prev) => [o, ...prev].slice(0, 25))
+  }
+
+  const exitOrder = (id) => {
+    setOrders((prev) => prev.filter((o) => o.id !== id))
+  }
 
   const load = async () => {
     try {
-      const [marketRes, signalsRes, chainRes, oiRes] = await Promise.all([
+      const [marketRes, signalsRes, chainRes, oiRes, candlesRes, regimeRes, liqRes, stopRes, finalRes] = await Promise.all([
         fetchMarket(),
         fetchSignals(),
         fetchOptionChain().catch(() => ({ NIFTY: {} })),
         fetchOi().catch(() => ({})),
+        fetchCandles('NIFTY', candleTimeframe, 200).catch(() => []),
+        fetchMarketRegime().catch(() => ({ market_regime: {} })),
+        fetchLiquidityMap().catch(() => ({ liquidity_map: {} })),
+        fetchStopHunts().catch(() => ({ stop_hunts: {} })),
+        fetchFinalSignal().catch(() => ({ final_signal: {} })),
       ])
       setMarket(marketRes.market || {})
       setSignals(signalsRes.signals || {})
       setOptionChain(chainRes?.NIFTY ? { NIFTY: chainRes.NIFTY } : chainRes || {})
       setOi(oiRes || {})
+      setCandles(Array.isArray(candlesRes) ? candlesRes : [])
+      setMarketRegime(regimeRes.market_regime || {})
+      setLiquidityMap(liqRes.liquidity_map || {})
+      setStopHunts(stopRes.stop_hunts || {})
+      setFinalSignal(finalRes.final_signal || {})
       setModelVersion(signalsRes.model_version || marketRes.model_version || null)
       setLastUpdate(new Date())
       setError(null)
@@ -181,7 +553,12 @@ export default function App() {
     load()
     const t = setInterval(load, 3000)
     return () => clearInterval(t)
-  }, [])
+  }, [candleTimeframe])
+
+  const handleCandleTimeframeChange = (tf) => {
+    setCandleTimeframe(tf)
+    fetchCandles('NIFTY', tf, 200).then(setCandles).catch(() => setCandles([]))
+  }
 
   return (
     <div className="min-h-screen bg-slate-950">
@@ -220,7 +597,7 @@ export default function App() {
           <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Scalping signals</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {Object.entries(signals).map(([symbol, s]) => (
-              <ScalpingCard key={symbol} symbol={symbol} scalping={s?.scalping} />
+              <ScalpingCard key={symbol} symbol={symbol} scalping={s?.scalping} onPlaceOrder={placeOrder} />
             ))}
             {Object.keys(signals).length === 0 && !error && (
               <div className="text-slate-500 col-span-2">Waiting for signals…</div>
@@ -228,10 +605,120 @@ export default function App() {
           </div>
         </section>
 
-        <section className="mb-8">
-          <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Option chain heatmap</h2>
+        <section className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+          <div className="lg:col-span-2 rounded-lg border border-slate-700 bg-slate-900/50 p-4 relative">
+            <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">NIFTY – Candles (Angel One style)</h2>
+            <NiftyCandleChart candles={candles} timeframe={candleTimeframe} onTimeframeChange={handleCandleTimeframeChange} />
+          </div>
           <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-4">
-            <OptionChainHeatmap chain={optionChain?.NIFTY || optionChain} />
+            <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Placed orders (paper)</h2>
+            <PlacedOrders orders={orders} onExit={exitOrder} />
+          </div>
+        </section>
+
+        <section className="mb-8">
+          <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Final signal (quant analytics)</h2>
+          <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-4">
+            <FinalSignalCard finalSignal={finalSignal} />
+          </div>
+        </section>
+
+        <section className="mb-8">
+          <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Market regime indicator</h2>
+          <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+              {Object.entries(marketRegime).length > 0 ? (
+                Object.entries(marketRegime).map(([symbol, r]) => (
+                  <div key={symbol} className="font-mono">
+                    <span className="text-slate-500 text-xs block mb-1">{symbol}</span>
+                    <MarketRegimeIndicator regime={r?.regime} confidence={r?.confidence} />
+                  </div>
+                ))
+              ) : (
+                Object.entries(signals).map(([symbol, s]) => (
+                  <div key={symbol} className="font-mono">
+                    <span className="text-slate-500 text-xs block mb-1">{symbol}</span>
+                    <MarketRegimeIndicator regime={s?.regime?.regime} confidence={s?.regime?.confidence} />
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </section>
+
+        <section className="mb-8">
+          <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Option chain heatmap (Angel live)</h2>
+          <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-4">
+            <OptionChainHeatmap optionChainData={optionChain?.NIFTY || optionChain} />
+          </div>
+        </section>
+
+        <section className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+          <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-4">
+            <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Liquidity map</h2>
+            {Object.entries(liquidityMap).length > 0 ? (
+              Object.entries(liquidityMap).map(([symbol, lm]) => (
+                <div key={symbol} className="mb-3">
+                  <span className="text-slate-500 text-xs block mb-1">{symbol}</span>
+                  <LiquidityMapPanel liquidityMap={lm} />
+                </div>
+              ))
+            ) : (
+              Object.entries(signals).map(([symbol, s]) => (
+                <div key={symbol} className="mb-3">
+                  <span className="text-slate-500 text-xs block mb-1">{symbol}</span>
+                  <LiquidityMapPanel liquidityMap={s?.liquidity_map} />
+                </div>
+              ))
+            )}
+          </div>
+          <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-4">
+            <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Stop-hunt detection</h2>
+            {Object.entries(stopHunts).length > 0 ? (
+              Object.entries(stopHunts).map(([symbol, sh]) => (
+                <div key={symbol} className="mb-3">
+                  <span className="text-slate-500 text-xs block mb-1">{symbol}</span>
+                  <StopHuntPanel stopHunt={sh} />
+                </div>
+              ))
+            ) : (
+              Object.entries(signals).map(([symbol, s]) => (
+                <div key={symbol} className="mb-3">
+                  <span className="text-slate-500 text-xs block mb-1">{symbol}</span>
+                  <StopHuntPanel stopHunt={s?.stop_hunt} />
+                </div>
+              ))
+            )}
+          </div>
+        </section>
+
+        <section className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+          <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-4">
+            <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Gamma exposure (GEX)</h2>
+            {Object.entries(signals).map(([symbol, s]) => (
+              <div key={symbol}>
+                <span className="text-slate-500 text-xs block mb-2">{symbol}</span>
+                <GammaExposureChart gammaLevels={s?.gamma_levels} />
+              </div>
+            ))}
+          </div>
+          <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-4">
+            <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Max pain</h2>
+            {Object.entries(signals).map(([symbol, s]) => (
+              <div key={symbol} className="mb-3">
+                <span className="text-slate-500 text-xs block mb-1">{symbol}</span>
+                <MaxPainIndicator maxPain={s?.max_pain} spot={market[symbol]?.last_price} />
+              </div>
+            ))}
+          </div>
+          <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-4">
+            <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Expiry bias</h2>
+            {Object.entries(signals).map(([symbol, s]) => (
+              <div key={symbol} className="mb-3">
+                <span className="text-slate-500 text-xs block mb-1">{symbol}</span>
+                <ExpiryBiasIndicator bias={s?.expiry_bias} expectedRange={s?.expiry_bias_range} />
+              </div>
+            ))}
           </div>
         </section>
 
