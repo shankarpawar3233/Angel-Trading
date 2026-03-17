@@ -237,7 +237,7 @@ def store_regime(symbol: str, ts, regime: str, confidence: float | None, payload
 
 
 def store_signal(
-    symbol: str, ts, category: Literal["scalping", "hero_zero", "institutional", "gamma", "expiry", "combined", "regime"], payload_json: str
+    symbol: str, ts, category: Literal["scalping", "hero_zero", "institutional", "gamma", "expiry", "combined", "regime", "final"], payload_json: str
 ) -> None:
     with get_connection() as conn:
         cursor = conn.cursor()
@@ -249,6 +249,35 @@ def store_signal(
             (symbol, ts, category, payload_json),
         )
         conn.commit()
+
+
+def get_signal_history(
+    symbol: str,
+    category: str = "final",
+    limit: int = 100,
+) -> list[dict]:
+    """
+    Load signal history for dashboard. Returns list of {ts, ...payload} with newest first.
+    """
+    import json
+    query = """
+        SELECT ts, payload_json
+        FROM signals
+        WHERE symbol = ? AND category = ?
+        ORDER BY ts ASC
+        LIMIT ?
+    """
+    with get_connection() as conn:
+        df = pd.read_sql_query(query, conn, params=(symbol, category, limit), parse_dates=["ts"])
+    out = []
+    for _, row in df.iterrows():
+        ts = row["ts"]
+        try:
+            payload = json.loads(row["payload_json"]) if isinstance(row["payload_json"], str) else row["payload_json"]
+        except Exception:
+            payload = {}
+        out.append({"ts": ts.isoformat() if hasattr(ts, "isoformat") else str(ts), **payload})
+    return out
 
 
 def insert_option_ticks(symbol: str, ticks: list) -> None:

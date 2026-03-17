@@ -80,24 +80,22 @@ def build_liquidity_map(
             "score": round(float(row["score"]), 4),
         })
 
-    # Support = high put OI / negative gamma below spot; resistance = high call OI / positive gamma above
+    # Support zones = strikes with highest PE OI; resistance zones = strikes with highest CE OI
     ce_oi = df[df["option_type"] == "CE"].groupby("strike")["oi"].sum()
     pe_oi = df[df["option_type"] == "PE"].groupby("strike")["oi"].sum()
 
-    support_zones: List[Dict[str, Any]] = []
-    resistance_zones: List[Dict[str, Any]] = []
-    for strike in sorted(by_strike["strike"].unique()):
-        pe = float(pe_oi.get(strike, 0))
-        ce = float(ce_oi.get(strike, 0))
-        g = gamma_by_strike.get(strike, 0.0)
-        strength = min(1.0, (pe + ce) / (oi_max + 1e-9))
-        if pe > ce and g <= 0:
-            support_zones.append({"strike": float(strike), "strength": round(strength, 3)})
-        elif ce > pe and g >= 0:
-            resistance_zones.append({"strike": float(strike), "strength": round(strength, 3)})
-
-    support_zones = sorted(support_zones, key=lambda x: -x["strength"])[:10]
-    resistance_zones = sorted(resistance_zones, key=lambda x: -x["strength"])[:10]
+    support_zones = [
+        {"strike": float(s), "strength": round(min(1.0, float(pe_oi.get(s, 0)) / (oi_max + 1e-9)), 3), "oi": float(pe_oi.get(s, 0))}
+        for s in pe_oi.index
+        if float(pe_oi.get(s, 0)) > 0
+    ]
+    resistance_zones = [
+        {"strike": float(s), "strength": round(min(1.0, float(ce_oi.get(s, 0)) / (oi_max + 1e-9)), 3), "oi": float(ce_oi.get(s, 0))}
+        for s in ce_oi.index
+        if float(ce_oi.get(s, 0)) > 0
+    ]
+    support_zones = sorted(support_zones, key=lambda x: -x.get("oi", 0))[:10]
+    resistance_zones = sorted(resistance_zones, key=lambda x: -x.get("oi", 0))[:10]
 
     # Stop-loss clusters: strikes with very high OI (likely stop clusters)
     by_strike_sorted = by_strike.sort_values("oi", ascending=False).head(top_n_strikes)
@@ -111,4 +109,62 @@ def build_liquidity_map(
         "support_zones": support_zones,
         "resistance_zones": resistance_zones,
         "stop_loss_clusters": stop_loss_clusters,
+    }
+
+
+def detect_liquidity_clusters(option_chain: pd.DataFrame) -> Dict[str, Any]:
+    """
+    Identify strikes with OI spike > 1.5 * average OI.
+    support_clusters = high PE OI; resistance_clusters = high CE OI.
+    stop_clusters = high volume + sudden OI drop (high vol, negative OI change).
+    """
+    if option_chain is None or option_chain.empty:
+        return {"support_zones": [], "resistance_zones": [], "stop_clusters": []}
+
+    df = option_chain.copy()
+    df["oi"] = df["oi"].fillna(0)
+    df["volume"] = df["volume"].fillna(0)
+    if "change_oi" not in df.columns and "oi_change" in df.columns:
+        df["change_oi"] = df["oi_change"]
+    if "change_oi" not in df.columns:
+        df["change_oi"] = 0.0
+    df["change_oi"] = df["change_oi"].fillna(0)
+
+    avg_oi = df["oi"].mean() or 1.0
+    oi_spike_mask = df["oi"] > 1.5 * avg_oi
+
+    pe_oi = df[df["option_type"] == "PE"].groupby("strike")["oi"].sum()
+    ce_oi = df[df["option_type"] == "CE"].groupby("strike")["oi"].sum()
+    avg_vol = df["volume"].mean() or 1.0
+    high_vol = df["volume"] > 1.5 * avg_vol
+    oi_drop = df["change_oi"] < 0
+
+    support_zones: List[Dict[str, Any]] = []
+    for strike in pe_oi.index:
+        if pe_oi[strike] > 1.5 * avg_oi:
+            support_zones.append({"strike": float(strike), "oi": float(pe_oi[strike])})
+    support_zones = sorted(support_zones, key=lambda x: -x["oi"])[:15]
+
+    resistance_zones: List[Dict[str, Any]] = []
+    for strike in ce_oi.index:
+        if ce_oi[strike] > 1.5 * avg_oi:
+            resistance_zones.append({"strike": float(strike), "oi": float(ce_oi[strike])})
+    resistance_zones = sorted(resistance_zones, key=lambda x: -x["oi"])[:15]
+
+    stop_candidates = df[high_vol & (oi_drop)]
+    stop_clusters = []
+    for strike in stop_candidates["strike"].unique():
+        sub = stop_candidates[stop_candidates["strike"] == strike]
+        if not sub.empty:
+            stop_clusters.append({
+                "strike": float(strike),
+                "volume": float(sub["volume"].sum()),
+                "oi_change": float(sub["change_oi"].sum()),
+            })
+    stop_clusters = sorted(stop_clusters, key=lambda x: -x["volume"])[:10]
+
+    return {
+        "support_zones": support_zones,
+        "resistance_zones": resistance_zones,
+        "stop_clusters": stop_clusters,
     }

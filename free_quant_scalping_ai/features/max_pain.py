@@ -38,12 +38,13 @@ def compute_max_pain(option_chain: pd.DataFrame) -> Dict[str, Any]:
     df["oi"] = df["oi"].fillna(0)
     strikes = sorted(df["strike"].unique())
 
+    # At expiry settlement K: CE writer loss = sum max(0, K - strike_ce)*oi_ce; PE writer loss = sum max(0, strike_pe - K)*oi_pe
     total_pain = []
     for K in strikes:
         ce_df = df[df["option_type"] == "CE"]
         pe_df = df[df["option_type"] == "PE"]
-        ce_pain = ((ce_df["strike"].values - K).clip(min=0) * ce_df["oi"].values).sum()
-        pe_pain = ((K - pe_df["strike"].values).clip(min=0) * pe_df["oi"].values).sum()
+        ce_pain = ((K - ce_df["strike"].values).clip(min=0) * ce_df["oi"].values).sum()
+        pe_pain = ((pe_df["strike"].values - K).clip(min=0) * pe_df["oi"].values).sum()
         total_pain.append(ce_pain + pe_pain)
 
     if not total_pain:
@@ -51,5 +52,5 @@ def compute_max_pain(option_chain: pd.DataFrame) -> Dict[str, Any]:
 
     min_idx = int(np.argmin(total_pain))
     max_pain = float(strikes[min_idx])
-    logger.info("[MAXPAIN] Max pain calculated at %s", max_pain)
+    logger.info("[MAXPAIN] strike calculated: %s", max_pain)
     return {"max_pain": max_pain}

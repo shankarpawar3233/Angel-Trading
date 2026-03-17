@@ -15,6 +15,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 from config.settings import settings
 from data.data_storage import (
+    get_signal_history,
     init_schema,
     insert_option_ticks,
     latest_option_chain,
@@ -24,13 +25,16 @@ from data.data_storage import (
 )
 from data.historical_fetcher import bootstrap_historical_data
 from data.live_price import get_live_price
-from features.gamma_exposure import compute_gamma_exposure
-from features.liquidity_map import build_liquidity_map
+from features.gamma_exposure import compute_gamma_exposure, compute_gamma_walls, detect_gamma_squeeze
+from features.liquidity_map import build_liquidity_map, detect_liquidity_clusters
+from features.market_maker_model import compute_market_maker_position
+from features.smart_money_flow import compute_smart_money_flow
 from features.max_pain import compute_max_pain
 from features.market_regime import detect_market_regime
 from features.oi_analysis import compute_oi_analysis
 from features.feature_engineering import engineer_all_features
 from strategies.ce_pe_signal_engine import build_final_signal, merge_signals
+from strategies.liquidity_trap_detector import detect_liquidity_trap
 from strategies.stop_hunt_detector import detect_stop_hunt
 
 try:
@@ -143,6 +147,8 @@ async def compute_for_symbol(symbol: str):
     if not option_chain.empty and "change_oi" not in option_chain.columns and "oi_change" in option_chain.columns:
         option_chain = option_chain.copy()
         option_chain["change_oi"] = option_chain["oi_change"]
+    if not option_chain.empty:
+        logger.info("[CHAIN] option chain loaded: %s rows", len(option_chain))
 
     live_info = get_live_price(symbol)
     live_price = live_info.get("price")
@@ -159,10 +165,40 @@ async def compute_for_symbol(symbol: str):
     inst = detect_institutional_flow_from_chain(option_chain)
     sweep = detect_liquidity_sweep(candles)
     gamma = analyze_gamma(symbol, option_chain)
-    expiry = expiry_prediction(symbol, option_chain)
     oi_analysis = compute_oi_analysis(option_chain) if not option_chain.empty else {}
-    gamma_exposure = compute_gamma_exposure(option_chain) if not option_chain.empty else {}
+    if oi_analysis and oi_analysis.get("pcr") is not None:
+        logger.info("[OI] PCR calculated: %s", oi_analysis.get("pcr"))
+    gamma_exposure = (
+        compute_gamma_exposure(option_chain, price=index_price) if not option_chain.empty else {}
+    )
+    if not option_chain.empty:
+        gamma_walls = compute_gamma_walls(option_chain)
+        gamma_exposure.update(gamma_walls)
     max_pain_result = compute_max_pain(option_chain) if not option_chain.empty else {}
+    if max_pain_result.get("max_pain") is not None:
+        logger.info("[MAXPAIN] strike calculated: %s", max_pain_result.get("max_pain"))
+    # PCR + Gamma + MaxPain convergence
+    convergence_result = {}
+    if index_price and (oi_analysis or gamma_exposure or max_pain_result):
+        try:
+            from strategies.convergence_engine import compute_convergence
+            convergence_result = compute_convergence(
+                price=index_price,
+                pcr=oi_analysis.get("pcr") if oi_analysis else None,
+                call_wall=gamma_exposure.get("call_wall") or gamma_exposure.get("gamma_wall_call"),
+                put_wall=gamma_exposure.get("put_wall") or gamma_exposure.get("gamma_wall_put"),
+                max_pain=max_pain_result.get("max_pain") if max_pain_result else None,
+            )
+        except Exception as e:
+            logger.debug("[CONVERGENCE] %s", e)
+    if convergence_result.get("bias"):
+        logger.info("[CONVERGENCE] bias detected: %s strength=%s", convergence_result.get("bias"), convergence_result.get("strength", 0))
+    expiry = expiry_prediction(
+        symbol, option_chain,
+        spot_price=index_price,
+        gamma_walls=gamma_exposure if not option_chain.empty else None,
+        institutional_flow=inst,
+    )
     expiry_bias = compute_expiry_direction(
         spot_price=index_price or 0.0,
         max_pain=max_pain_result.get("max_pain"),
@@ -172,13 +208,15 @@ async def compute_for_symbol(symbol: str):
         option_chain=option_chain if not option_chain.empty else None,
     )
 
-    # Liquidity map (OI + volume + gamma)
+    # Liquidity map (OI + volume + gamma) + liquidity clusters
     liquidity_map = {}
     if not option_chain.empty:
         liquidity_map = build_liquidity_map(
             option_chain,
             gamma_levels=gamma_exposure.get("gamma_levels"),
         )
+        clusters = detect_liquidity_clusters(option_chain)
+        liquidity_map["stop_clusters"] = clusters.get("stop_clusters", [])
 
     # Market regime (EMA, VWAP, ATR, RSI, volume)
     regime_result = detect_market_regime(candles)
@@ -192,6 +230,17 @@ async def compute_for_symbol(symbol: str):
 
     # Stop-hunt detection
     stop_hunt_result = detect_stop_hunt(candles, option_chain, liquidity_map)
+    # Liquidity trap
+    liquidity_trap_result = detect_liquidity_trap(candles, option_chain, liquidity_map) if liquidity_map else {"trap_detected": False, "trap_type": None, "confidence": 0}
+    # Market maker positioning
+    dealer_position_result = compute_market_maker_position(option_chain, spot=index_price) if not option_chain.empty else {}
+    # Gamma squeeze
+    gamma_squeeze_result = detect_gamma_squeeze(option_chain, index_price or 0.0) if not option_chain.empty else {}
+    # Smart money: price change from last few candles
+    price_change = 0.0
+    if not candles.empty and len(candles) >= 5:
+        price_change = float(candles["close"].iloc[-1] - candles["close"].iloc[-5]) / (float(candles["close"].iloc[-5]) + 1e-9)
+    smart_money_result = compute_smart_money_flow(option_chain, price_change) if not option_chain.empty else {}
 
     fused = merge_signals(
         ml_decision, rl_decision, scalping, hero_zero, inst, gamma, expiry, sweep, model_version=model_version,
@@ -202,9 +251,14 @@ async def compute_for_symbol(symbol: str):
         liquidity_map=liquidity_map,
         regime=regime_result,
         stop_hunt=stop_hunt_result,
+        dealer_position=dealer_position_result,
+        gamma_squeeze=gamma_squeeze_result,
+        smart_money=smart_money_result,
+        liquidity_trap=liquidity_trap_result,
+        convergence=convergence_result,
     )
 
-    final_signal = build_final_signal(symbol, index_price or 0.0, fused)
+    final_signal = build_final_signal(symbol, index_price or 0.0, fused, option_chain=option_chain if not option_chain.empty else None)
 
     ts = datetime.now(timezone.utc)
     state["market"][symbol] = {
@@ -234,6 +288,13 @@ async def compute_for_symbol(symbol: str):
         ts=ts,
         category="combined",
         payload_json=json.dumps(fused, default=str),
+    )
+    # Store final signal for history (dashboard)
+    store_signal(
+        symbol=symbol,
+        ts=ts,
+        category="final",
+        payload_json=json.dumps(final_signal, default=str),
     )
 
     # Section 18 logging
@@ -270,7 +331,7 @@ async def main_loop():
                 await compute_for_symbol(symbol)
             except Exception as exc:
                 logger.exception("Error in main loop for %s: %s", symbol, exc)
-        await asyncio.sleep(60)  # run roughly every minute
+        await asyncio.sleep(5)  # run every 5 seconds
 
 
 def _persist_option_ticks():
@@ -424,7 +485,15 @@ async def get_option_chain():
         from features.option_chain_builder import build_option_chain, option_chain_to_dataframe
         from features.oi_analysis import compute_oi_analysis
         snap = get_live_option_chain_snapshot()
-        chain = build_option_chain(snap)
+        # Chain: use strike-keyed snapshot as-is if it is strike-keyed, else build from flat
+        first_key = next(iter(snap)) if snap else ""
+        first_val = snap.get(first_key) if first_key else None
+        is_strike_keyed = (
+            isinstance(first_val, dict)
+            and not (str(first_key).endswith("CE") or str(first_key).endswith("PE"))
+            and ("CE" in first_val or "PE" in first_val)
+        )
+        chain = snap if is_strike_keyed else build_option_chain(snap)
         df = option_chain_to_dataframe(snap, symbol_prefix="NIFTY")
         analytics = compute_oi_analysis(df) if not df.empty else {}
         # Hero-zero strikes for dashboard highlighting
@@ -519,6 +588,13 @@ async def get_stop_hunts():
 async def get_final_signal():
     """Final combined signal per symbol (Section 19 format)."""
     return {"final_signal": state.get("final_signal", {})}
+
+
+@app.get("/signal-history")
+async def get_signal_history_endpoint(symbol: str = "NIFTY", limit: int = 50):
+    """History of signals given by the system (final signal per tick). Newest first."""
+    history = get_signal_history(symbol=symbol, category="final", limit=min(limit, 200))
+    return {"symbol": symbol, "history": history}
 
 
 @app.websocket("/ws/signals")

@@ -15,10 +15,15 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-PREMIUM_THRESHOLD = 20.0
-VOLUME_SPIKE_MULTIPLIER = 3.0
+PREMIUM_MIN = 5.0
+PREMIUM_MAX = 20.0
+VOLUME_SPIKE_MULTIPLIER = 2.0
+OI_INCREASE_PCT = 0.05
+ATM_BAND_POINTS = 200
 MIN_PROBABILITY = 50.0
 MAX_PROBABILITY = 90.0
+TARGET_MULTIPLIER = 3.0
+STOPLOSS_MULTIPLIER = 0.6
 
 
 def detect_hero_zero_live(
@@ -58,13 +63,21 @@ def detect_hero_zero_live(
         df["change_oi"] = df["oi_change"]
     if "change_oi" not in df.columns:
         df["change_oi"] = 0.0
+    df["oi"] = df["oi"].fillna(0)
 
-    # Cheap premium
-    df = df[df["ltp"].notna() & (df["ltp"] < PREMIUM_THRESHOLD)]
+    # Premium between 5 and 20
+    df = df[df["ltp"].notna() & (df["ltp"] >= PREMIUM_MIN) & (df["ltp"] <= PREMIUM_MAX)]
     if df.empty:
         return {"candidates": []}
 
-    # Volume spike: volume > 3 * average volume (across chain or rolling)
+    # Only strikes within ±200 points of ATM
+    df["strike"] = pd.to_numeric(df["strike"], errors="coerce")
+    df = df.dropna(subset=["strike"])
+    df = df[(df["strike"] >= index_price - ATM_BAND_POINTS) & (df["strike"] <= index_price + ATM_BAND_POINTS)]
+    if df.empty:
+        return {"candidates": []}
+
+    # Volume spike: volume > 2 * average volume
     if "volume" in df.columns and df["volume"].sum() > 0:
         vol_avg = df["volume"].mean()
         if vol_avg and vol_avg > 0:
@@ -72,23 +85,25 @@ def detect_hero_zero_live(
     if df.empty:
         return {"candidates": []}
 
-    # OI breakout: positive OI change
-    df["oi_breakout"] = (df["change_oi"].fillna(0) > 0) & (df["oi"].fillna(0) > 0)
-    # Score: premium cheap + volume spike + OI build
-    df["score"] = (
-        (PREMIUM_THRESHOLD - df["ltp"]) / PREMIUM_THRESHOLD * 0.3
-        + (df["volume"] / (df["volume"].mean() + 1e-9)) * 0.3
-        + (df["change_oi"].fillna(0) / (df["oi"].fillna(1) + 1e-9)) * 0.4
-    )
+    # OI increase: change_oi > 5% of OI
+    df["oi_pct_change"] = df["change_oi"].fillna(0) / (df["oi"] + 1e-9)
+    df = df[df["oi_pct_change"] > OI_INCREASE_PCT]
+    if df.empty:
+        return {"candidates": []}
 
+    df["score"] = (
+        (PREMIUM_MAX - df["ltp"]) / (PREMIUM_MAX - PREMIUM_MIN + 1e-9) * 0.35
+        + (df["volume"] / (df["volume"].mean() + 1e-9)) * 0.35
+        + df["oi_pct_change"].clip(upper=0.5) * 0.3
+    )
     top = df.nlargest(5, "score")
     candidates: List[Dict[str, Any]] = []
 
     for _, row in top.iterrows():
         entry = float(row["ltp"])
-        target = min(entry * 5.0, 60.0)
-        stoploss = max(entry * 0.5, 7.0)
-        prob = min(MAX_PROBABILITY, max(MIN_PROBABILITY, 50 + row["score"] * 20))
+        target = entry * TARGET_MULTIPLIER
+        stoploss = entry * STOPLOSS_MULTIPLIER
+        prob = min(MAX_PROBABILITY, max(MIN_PROBABILITY, 50 + row["score"] * 25))
         strike = float(row["strike"])
         opt_type = str(row["option_type"])
 
@@ -99,7 +114,7 @@ def detect_hero_zero_live(
             "target": round(target, 2),
             "stoploss": round(stoploss, 2),
             "probability": round(prob, 1),
-            "reason": "premium_ok|volume_spike|oi_breakout",
+            "reason": "premium_ok|volume_spike|oi_increase",
         })
 
     if candidates:

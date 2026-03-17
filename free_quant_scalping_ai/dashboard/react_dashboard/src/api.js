@@ -65,3 +65,9 @@ export async function fetchFinalSignal() {
   if (!res.ok) return { final_signal: {} };
   return res.json();
 }
+
+export async function fetchSignalHistory(symbol = 'NIFTY', limit = 50) {
+  const res = await fetch(`${API_BASE}/signal-history?symbol=${encodeURIComponent(symbol)}&limit=${limit}`);
+  if (!res.ok) return { symbol: symbol, history: [] };
+  return res.json();
+}

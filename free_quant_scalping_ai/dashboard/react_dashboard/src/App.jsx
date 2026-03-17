@@ -12,7 +12,7 @@ import {
 } from 'chart.js'
 import { Bar, Line } from 'react-chartjs-2'
 import { createChart } from 'lightweight-charts'
-import { fetchMarket, fetchSignals, fetchOptionChain, fetchOi, fetchCandles, fetchMarketRegime, fetchLiquidityMap, fetchStopHunts, fetchFinalSignal } from './api'
+import { fetchMarket, fetchSignals, fetchOptionChain, fetchOi, fetchCandles, fetchMarketRegime, fetchLiquidityMap, fetchStopHunts, fetchFinalSignal, fetchSignalHistory } from './api'
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, LineElement, PointElement, Title, Tooltip, Legend)
 
@@ -359,15 +359,67 @@ function FinalSignalCard({ finalSignal }) {
             <span className="text-white font-bold">{s?.price != null ? Number(s.price).toLocaleString() : '–'}</span>
           </div>
           <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
-            <span className="text-slate-500">Regime</span><span className="text-slate-200">{s?.regime ?? '–'}</span>
             <span className="text-slate-500">Trade</span><span className={s?.trade === 'BUY_CE' ? 'text-cyan-400' : s?.trade === 'BUY_PE' ? 'text-amber-400' : 'text-slate-400'}>{s?.trade ?? '–'}</span>
+            <span className="text-slate-500">Strike</span><span className="text-slate-200">{s?.strike ?? '–'}</span>
+            <span className="text-slate-500">Buy / Entry</span><span className="text-white font-medium">{s?.entry != null ? Number(s.entry).toFixed(2) : '–'}</span>
+            <span className="text-slate-500">Target</span><span className="text-emerald-400">{s?.target != null ? Number(s.target).toFixed(2) : '–'}</span>
+            <span className="text-slate-500">Stoploss</span><span className="text-red-400">{s?.stoploss != null ? Number(s.stoploss).toFixed(2) : '–'}</span>
             <span className="text-slate-500">Confidence</span><span className="text-slate-200">{s?.confidence != null ? `${s.confidence}%` : '–'}</span>
+            <span className="text-slate-500">Regime</span><span className="text-slate-200">{s?.regime ?? '–'}</span>
             <span className="text-slate-500">Gamma wall</span><span className="text-slate-200">{s?.gamma_wall ?? '–'}</span>
             <span className="text-slate-500">Max pain</span><span className="text-slate-200">{s?.max_pain ?? '–'}</span>
             <span className="text-slate-500">Flow</span><span className="text-slate-200">{s?.institutional_flow ?? '–'}</span>
           </div>
         </div>
       ))}
+    </div>
+  )
+}
+
+function SignalHistoryPanel({ history, symbol }) {
+  const list = history || []
+  if (!list.length) return <div className="text-slate-500 text-sm">No signal history yet. Signals are stored each time the system runs (every ~60s).</div>
+  const fmtTime = (ts) => {
+    if (!ts) return '–'
+    try {
+      const d = new Date(ts)
+      return isNaN(d.getTime()) ? ts : d.toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'medium' })
+    } catch (_) { return ts }
+  }
+  const tradeColor = (trade) => trade === 'BUY_CE' ? 'text-cyan-400' : trade === 'BUY_PE' ? 'text-amber-400' : 'text-slate-400'
+  return (
+    <div className="space-y-2">
+      <div className="text-xs text-slate-500 font-mono mb-2">Symbol: {symbol} · Newest first</div>
+      <div className="overflow-auto max-h-80 border border-slate-700 rounded-lg">
+        <table className="w-full text-xs font-mono border-collapse">
+          <thead className="bg-slate-800/80 sticky top-0">
+            <tr>
+              <th className="text-left p-2 text-slate-400 font-semibold">Time</th>
+              <th className="text-left p-2 text-slate-400">Price</th>
+              <th className="text-left p-2 text-slate-400">Trade</th>
+              <th className="text-left p-2 text-slate-400">Entry</th>
+              <th className="text-left p-2 text-slate-400">Target</th>
+              <th className="text-left p-2 text-slate-400">SL</th>
+              <th className="text-left p-2 text-slate-400">Conf.</th>
+              <th className="text-left p-2 text-slate-400">Regime</th>
+            </tr>
+          </thead>
+          <tbody>
+            {list.map((row, i) => (
+              <tr key={i} className="border-t border-slate-700/50 hover:bg-slate-800/40">
+                <td className="p-2 text-slate-400">{fmtTime(row.ts)}</td>
+                <td className="p-2 text-slate-200">{row.price != null ? Number(row.price).toLocaleString(undefined, { maximumFractionDigits: 2 }) : '–'}</td>
+                <td className={`p-2 ${tradeColor(row.trade)}`}>{row.trade ?? '–'}</td>
+                <td className="p-2 text-white">{row.entry != null ? Number(row.entry).toFixed(2) : '–'}</td>
+                <td className="p-2 text-emerald-400">{row.target != null ? Number(row.target).toFixed(2) : '–'}</td>
+                <td className="p-2 text-red-400">{row.stoploss != null ? Number(row.stoploss).toFixed(2) : '–'}</td>
+                <td className="p-2 text-slate-200">{row.confidence != null ? `${row.confidence}%` : '–'}</td>
+                <td className="p-2 text-slate-300">{row.regime ?? '–'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }
@@ -500,6 +552,7 @@ export default function App() {
   const [liquidityMap, setLiquidityMap] = useState({})
   const [stopHunts, setStopHunts] = useState({})
   const [finalSignal, setFinalSignal] = useState({})
+  const [signalHistory, setSignalHistory] = useState({ symbol: 'NIFTY', history: [] })
 
   const placeOrder = (symbol, scalping) => {
     const o = {
@@ -521,7 +574,7 @@ export default function App() {
 
   const load = async () => {
     try {
-      const [marketRes, signalsRes, chainRes, oiRes, candlesRes, regimeRes, liqRes, stopRes, finalRes] = await Promise.all([
+      const [marketRes, signalsRes, chainRes, oiRes, candlesRes, regimeRes, liqRes, stopRes, finalRes, historyRes] = await Promise.all([
         fetchMarket(),
         fetchSignals(),
         fetchOptionChain().catch(() => ({ NIFTY: {} })),
@@ -531,6 +584,7 @@ export default function App() {
         fetchLiquidityMap().catch(() => ({ liquidity_map: {} })),
         fetchStopHunts().catch(() => ({ stop_hunts: {} })),
         fetchFinalSignal().catch(() => ({ final_signal: {} })),
+        fetchSignalHistory('NIFTY', 50).catch(() => ({ symbol: 'NIFTY', history: [] })),
       ])
       setMarket(marketRes.market || {})
       setSignals(signalsRes.signals || {})
@@ -541,6 +595,7 @@ export default function App() {
       setLiquidityMap(liqRes.liquidity_map || {})
       setStopHunts(stopRes.stop_hunts || {})
       setFinalSignal(finalRes.final_signal || {})
+      setSignalHistory(historyRes?.history ? { symbol: historyRes.symbol || 'NIFTY', history: historyRes.history } : { symbol: 'NIFTY', history: [] })
       setModelVersion(signalsRes.model_version || marketRes.model_version || null)
       setLastUpdate(new Date())
       setError(null)
@@ -620,6 +675,14 @@ export default function App() {
           <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Final signal (quant analytics)</h2>
           <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-4">
             <FinalSignalCard finalSignal={finalSignal} />
+          </div>
+        </section>
+
+        <section className="mb-8">
+          <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Signal history</h2>
+          <p className="text-xs text-slate-500 mb-2">Past signals given by the system (stored every ~60s). Newest first.</p>
+          <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-4">
+            <SignalHistoryPanel history={signalHistory.history} symbol={signalHistory.symbol} />
           </div>
         </section>
 

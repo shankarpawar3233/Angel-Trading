@@ -118,11 +118,15 @@ def detect_institutional_flow_from_chain(
             conf = min(90, int(60 + abs(oi_delta) / 1000))
             details.append({"strike": sk, "option_type": ot, "flow_type": st_flow, "confidence": conf})
 
+    # Strength 0-100 from OI change magnitude and consistency
+    strength = min(100, max(0, int(confidence)))
     if flow_type != "NEUTRAL":
-        logger.info("[FLOW] Institutional %s", flow_type)
+        logger.info("[FLOW] Institutional flow: %s (strength %s)", flow_type, strength)
 
     return {
         "flow_type": flow_type,
+        "flow": flow_type,
+        "strength": strength,
         "strike": df["strike"].iloc[0] if not df.empty else None,
         "confidence": confidence,
         "details": details,

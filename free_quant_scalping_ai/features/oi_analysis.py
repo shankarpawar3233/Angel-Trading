@@ -51,22 +51,31 @@ def compute_oi_analysis(
     if "change_oi" not in df.columns:
         df["change_oi"] = 0.0
 
-    # PCR: put OI / call OI
+    # PCR: Put Call Ratio = total_put_oi / total_call_oi
     ce_oi = df.loc[df["option_type"] == "CE", "oi"].sum()
     pe_oi = df.loc[df["option_type"] == "PE", "oi"].sum()
     ce_oi = float(ce_oi) if pd.notna(ce_oi) else 0.0
     pe_oi = float(pe_oi) if pd.notna(pe_oi) else 0.0
     pcr = pe_oi / (ce_oi + 1e-9)
+    logger.info("[OI] PCR calculated: %.4f", pcr)
 
-    # Max OI strike for CE and PE
-    ce_df = df[df["option_type"] == "CE"]
-    pe_df = df[df["option_type"] == "PE"]
-    max_oi_call = float(ce_df.loc[ce_df["oi"].idxmax(), "strike"]) if not ce_df.empty and ce_df["oi"].max() else None
-    max_oi_put = float(pe_df.loc[pe_df["oi"].idxmax(), "strike"]) if not pe_df.empty and pe_df["oi"].max() else None
-    if max_oi_call is not None and (pd.isna(max_oi_call) or ce_df["oi"].max() == 0):
-        max_oi_call = None
-    if max_oi_put is not None and (pd.isna(max_oi_put) or pe_df["oi"].max() == 0):
-        max_oi_put = None
+    # Max OI strike for CE and PE (strikes with highest call OI and highest put OI)
+    ce_df = df[df["option_type"] == "CE"].copy()
+    pe_df = df[df["option_type"] == "PE"].copy()
+    ce_df["oi"] = ce_df["oi"].fillna(0)
+    pe_df["oi"] = pe_df["oi"].fillna(0)
+    max_oi_call = None
+    max_oi_put = None
+    if not ce_df.empty and ce_df["oi"].max() > 0:
+        try:
+            max_oi_call = float(ce_df.loc[ce_df["oi"].idxmax(), "strike"])
+        except (ValueError, KeyError):
+            pass
+    if not pe_df.empty and pe_df["oi"].max() > 0:
+        try:
+            max_oi_put = float(pe_df.loc[pe_df["oi"].idxmax(), "strike"])
+        except (ValueError, KeyError):
+            pass
 
     # Volume spike: volume > multiplier * rolling mean (or mean)
     volume_spikes: List[Dict[str, Any]] = []
@@ -111,6 +120,8 @@ def compute_oi_analysis(
         "pcr": round(pcr, 4),
         "max_oi_call": max_oi_call,
         "max_oi_put": max_oi_put,
+        "max_call_oi": max_oi_call,
+        "max_put_oi": max_oi_put,
         "max_call_oi_strike": max_oi_call,
         "max_put_oi_strike": max_oi_put,
         "oi_spikes": oi_spikes[:20],

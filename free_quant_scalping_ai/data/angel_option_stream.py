@@ -21,6 +21,8 @@ NFO_EXCHANGE_TYPE = 2
 # In-memory live option chain: key = "STRIKE{CE|PE}" e.g. "23150CE"
 # Value = {"ltp", "volume", "oi", "oi_change", "symbol", "token"}
 live_option_chain: Dict[str, Dict[str, Any]] = {}
+# Strike-keyed structure for institutional use: "23100" -> {"CE": {ltp, volume, oi, change_oi}, "PE": {...}}
+global_option_chain: Dict[str, Dict[str, Dict[str, Any]]] = {}
 _lock = threading.Lock()
 
 # Token -> strike key mapping (e.g. "12345" -> "23150CE") for tick updates
@@ -28,6 +30,9 @@ _token_to_key: Dict[str, str] = {}
 _stream_thread: Optional[threading.Thread] = None
 _sws: Any = None
 _running = False
+_reconnect_interval = 5.0
+_token_list: List[Dict[str, str]] = []
+_credentials: Optional[Dict[str, str]] = None
 
 
 def _symbol_to_chain_key(symbol: str) -> str:
@@ -68,15 +73,25 @@ def _on_tick(wsapp: Any, message: Any) -> None:
 
 
 def _apply_tick(item: Dict[str, Any]) -> None:
-    """Apply a single tick to live_option_chain."""
+    """Apply a single tick to live_option_chain and global_option_chain.
+    Extracts from Angel tick: last_traded_price (in paise, /100), volume, open_interest, change_in_open_interest.
+    """
+    global live_option_chain, global_option_chain, _token_to_key
     token = item.get("symbolToken") or item.get("token") or item.get("symboltoken") or ""
     token_str = str(token)
     key = _token_to_key.get(token_str)
     if not key:
         return
+    # Angel tick fields: ltp/lastPrice or last_traded_price (in paise)
     ltp = item.get("ltp") or item.get("lastPrice")
-    vol = item.get("volume") or item.get("volumeTraded")
-    oi = item.get("oi") or item.get("openInterest")
+    if ltp is None and "last_traded_price" in item:
+        try:
+            ltp = float(item["last_traded_price"]) / 100.0
+        except (TypeError, ValueError):
+            pass
+    vol = item.get("volume") or item.get("volumeTraded") or item.get("volume_traded")
+    oi = item.get("oi") or item.get("openInterest") or item.get("open_interest")
+    change_oi = item.get("change_in_open_interest") or item.get("changeInOpenInterest") or item.get("oi_change")
     if ltp is None and vol is None and oi is None:
         return
     with _lock:
@@ -84,11 +99,16 @@ def _apply_tick(item: Dict[str, Any]) -> None:
         prev_oi = cur.get("oi")
         oi_val = float(oi) if oi is not None else cur.get("oi")
         oi_change = None
-        if oi_val is not None and prev_oi is not None:
+        if change_oi is not None:
+            try:
+                oi_change = float(change_oi)
+            except (TypeError, ValueError):
+                pass
+        if oi_change is None and oi_val is not None and prev_oi is not None:
             oi_change = oi_val - prev_oi
-        elif oi is not None:
+        elif oi_change is None and oi is not None:
             oi_change = float(oi)
-        live_option_chain[key] = {
+        row = {
             "ltp": float(ltp) if ltp is not None else cur.get("ltp"),
             "volume": int(vol) if vol is not None else cur.get("volume", 0),
             "oi": float(oi) if oi is not None else cur.get("oi"),
@@ -96,6 +116,77 @@ def _apply_tick(item: Dict[str, Any]) -> None:
             "symbol": cur.get("symbol"),
             "token": cur.get("token") or token_str,
         }
+        live_option_chain[key] = row
+        # Update global_option_chain: strike -> CE/PE
+        strike_str = key[:-2] if key.endswith("CE") or key.endswith("PE") else key
+        opt_side = "CE" if key.endswith("CE") else "PE"
+        if strike_str not in global_option_chain:
+            global_option_chain[strike_str] = {}
+        global_option_chain[strike_str][opt_side] = {
+            "ltp": row["ltp"],
+            "volume": row["volume"],
+            "oi": row["oi"],
+            "change_oi": row["oi_change"],
+        }
+
+
+def _run_stream_loop() -> None:
+    """Run WebSocket with auto-reconnect every 5 seconds on disconnect."""
+    global _sws, _running, _token_to_key, live_option_chain, global_option_chain
+    global _token_list, _credentials
+    while _running and _token_list and _credentials:
+        try:
+            from SmartApi.smartWebSocketV2 import SmartWebSocketV2
+        except ImportError:
+            break
+        auth_token = _credentials.get("auth_token")
+        api_key = _credentials.get("api_key")
+        client_code = _credentials.get("client_code")
+        feed_token = _credentials.get("feed_token")
+        if not all([auth_token, api_key, client_code, feed_token]):
+            break
+        exchange_tokens = [str(t["token"]) for t in _token_list]
+        batch_size = 500
+        token_batches = [exchange_tokens[i : i + batch_size] for i in range(0, len(exchange_tokens), batch_size)]
+
+        with _lock:
+            _token_to_key.clear()
+            for t in _token_list:
+                sym = t.get("symbol", "")
+                tok = t.get("token", "")
+                if sym and tok:
+                    key = _symbol_to_chain_key(sym)
+                    _token_to_key[str(tok)] = key
+                    live_option_chain.setdefault(key, {"symbol": sym, "token": tok, "ltp": None, "volume": 0, "oi": None, "oi_change": None})
+
+        try:
+            _sws = SmartWebSocketV2(auth_token, api_key, client_code, feed_token)
+
+            def on_data(wsapp: Any, message: Any) -> None:
+                _on_tick(wsapp, message)
+
+            def on_open(wsapp: Any) -> None:
+                logger.info("[CHAIN] option chain snapshot updated (stream connected)")
+                for i, batch in enumerate(token_batches):
+                    lst = [{"exchangeType": NFO_EXCHANGE_TYPE, "tokens": batch}]
+                    _sws.subscribe(f"nifty_opt_{i}", 1, lst)
+
+            def on_error(wsapp: Any, error: Any) -> None:
+                logger.error("[WS] Option stream error: %s", error)
+
+            def on_close(wsapp: Any) -> None:
+                logger.info("[WS] Angel option stream closed; reconnecting in %.0fs", _reconnect_interval)
+
+            _sws.on_data = on_data
+            _sws.on_open = on_open
+            _sws.on_error = on_error
+            _sws.on_close = on_close
+            _sws.connect()
+        except Exception as exc:
+            logger.exception("[WS] Option stream failed: %s", exc)
+        if not _running:
+            break
+        time.sleep(_reconnect_interval)
 
 
 def start_option_stream(
@@ -103,12 +194,11 @@ def start_option_stream(
     credentials: Optional[Dict[str, str]] = None,
 ) -> bool:
     """
-    Start WebSocket stream in a background thread.
+    Start WebSocket stream in a background thread with auto-reconnect.
     token_list: [{"symbol": "NIFTY24MAR23150CE", "token": "12345"}, ...]
     credentials: from data.angel_live_price.get_angel_ws_credentials()
-    persist_callback: optional callable() to persist live_option_chain to DB periodically.
     """
-    global _stream_thread, _running, _token_to_key
+    global _stream_thread, _running, _token_list, _credentials
     if _running:
         logger.info("[WS] Option stream already running")
         return True
@@ -138,55 +228,10 @@ def start_option_stream(
         logger.warning("[WS] Incomplete credentials")
         return False
 
-    # Build token -> chain key map
-    with _lock:
-        _token_to_key.clear()
-        for t in token_list:
-            sym = t.get("symbol", "")
-            tok = t.get("token", "")
-            if sym and tok:
-                key = _symbol_to_chain_key(sym)
-                _token_to_key[str(tok)] = key
-                live_option_chain.setdefault(key, {"symbol": sym, "token": tok, "ltp": None, "volume": 0, "oi": None, "oi_change": None})
-
-    # NFO exchange type = 2; mode 1 = LTP, 2 = full
-    exchange_tokens = [str(t["token"]) for t in token_list]
-    # Angel allows max tokens per request; batch if needed
-    batch_size = 500
-    token_batches = [exchange_tokens[i : i + batch_size] for i in range(0, len(exchange_tokens), batch_size)]
-
-    def _run() -> None:
-        global _sws, _running
-        try:
-            _sws = SmartWebSocketV2(auth_token, api_key, client_code, feed_token)
-
-            def on_data(wsapp: Any, message: Any) -> None:
-                _on_tick(wsapp, message)
-
-            def on_open(wsapp: Any) -> None:
-                logger.info("[WS] Angel option stream connected")
-                for i, batch in enumerate(token_batches):
-                    lst = [{"exchangeType": NFO_EXCHANGE_TYPE, "tokens": batch}]
-                    _sws.subscribe(f"nifty_opt_{i}", 1, lst)
-
-            def on_error(wsapp: Any, error: Any) -> None:
-                logger.error("[WS] Option stream error: %s", error)
-
-            def on_close(wsapp: Any) -> None:
-                logger.info("[WS] Angel option stream closed")
-
-            _sws.on_data = on_data
-            _sws.on_open = on_open
-            _sws.on_error = on_error
-            _sws.on_close = on_close
-            _running = True
-            _sws.connect()
-        except Exception as exc:
-            logger.exception("[WS] Option stream failed: %s", exc)
-        finally:
-            _running = False
-
-    _stream_thread = threading.Thread(target=_run, daemon=True)
+    _token_list = list(token_list)
+    _credentials = dict(credentials)
+    _running = True
+    _stream_thread = threading.Thread(target=_run_stream_loop, daemon=True)
     _stream_thread.start()
     return True
 
@@ -203,10 +248,27 @@ def stop_option_stream() -> None:
         _sws = None
 
 
-def get_live_option_chain_snapshot() -> Dict[str, Dict[str, Any]]:
-    """Return a copy of the current live option chain."""
+def get_live_option_chain_snapshot() -> Dict[str, Any]:
+    """
+    Return the latest option chain snapshot (strike-keyed: "23150" -> {"CE": {...}, "PE": {...}}).
+    Safe to call from any thread. Caller can convert to DataFrame via option_chain_to_dataframe.
+    If global_option_chain is empty, returns flat live_option_chain for backward compatibility.
+    """
     with _lock:
+        if global_option_chain:
+            n = len(global_option_chain)
+            try:
+                print("[CHAIN] strikes loaded:", n)
+            except Exception:
+                logger.info("[CHAIN] option chain loaded, strikes=%s", n)
+            return {k: dict(v) for k, v in global_option_chain.items()}
         return dict(live_option_chain)
+
+
+def get_global_option_chain_snapshot() -> Dict[str, Dict[str, Dict[str, Any]]]:
+    """Return strike-keyed chain: {\"23100\": {\"CE\": {ltp, volume, oi, change_oi}, \"PE\": {...}}}."""
+    with _lock:
+        return {k: dict(v) for k, v in global_option_chain.items()}
 
 
 def get_live_option_chain_as_dataframe(symbol_prefix: str = "NIFTY") -> "pd.DataFrame":
