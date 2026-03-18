@@ -24,12 +24,6 @@ export async function fetchOi() {
   return res.json();
 }
 
-export async function fetchCandles(symbol = 'NIFTY', timeframe = '5m', limit = 200) {
-  const res = await fetch(`${API_BASE}/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&limit=${limit}`);
-  if (!res.ok) return [];
-  return res.json();
-}
-
 export async function fetchMarketRegime() {
   const res = await fetch(`${API_BASE}/market-regime`);
   if (!res.ok) return { market_regime: {} };

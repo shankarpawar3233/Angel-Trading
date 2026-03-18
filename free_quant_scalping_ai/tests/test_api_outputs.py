@@ -68,7 +68,6 @@ def main():
     print("\n--- Core ---")
     results.append(test_endpoint("market", "/market", ["market"]))
     results.append(test_endpoint("signals", "/signals", ["signals"]))
-    results.append(test_endpoint("candles", "/candles?symbol=NIFTY&timeframe=5m&limit=10"))
 
     # Quant analytics endpoints
     print("\n--- Quant analytics ---")

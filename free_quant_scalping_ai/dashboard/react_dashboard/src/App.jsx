@@ -4,17 +4,15 @@ import {
   CategoryScale,
   LinearScale,
   BarElement,
-  LineElement,
   PointElement,
   Title,
   Tooltip,
   Legend,
 } from 'chart.js'
-import { Bar, Line } from 'react-chartjs-2'
-import { createChart } from 'lightweight-charts'
-import { fetchMarket, fetchSignals, fetchOptionChain, fetchOi, fetchCandles, fetchMarketRegime, fetchLiquidityMap, fetchStopHunts, fetchFinalSignal, fetchSignalHistory } from './api'
+import { Bar } from 'react-chartjs-2'
+import { fetchMarket, fetchSignals, fetchOptionChain, fetchOi, fetchMarketRegime, fetchLiquidityMap, fetchStopHunts, fetchFinalSignal, fetchSignalHistory } from './api'
 
-ChartJS.register(CategoryScale, LinearScale, BarElement, LineElement, PointElement, Title, Tooltip, Legend)
+ChartJS.register(CategoryScale, LinearScale, BarElement, PointElement, Title, Tooltip, Legend)
 
 function LiveBadge() {
   return (
@@ -425,90 +423,8 @@ function SignalHistoryPanel({ history, symbol }) {
 }
 
 function NiftyCandleChart({ candles, timeframe, onTimeframeChange }) {
-  const chartRef = useRef(null)
-  const chartInstance = useRef(null)
-
-  useEffect(() => {
-    if (!chartRef.current || !candles || candles.length === 0) return
-    const container = chartRef.current
-    if (chartInstance.current) {
-      chartInstance.current.remove()
-      chartInstance.current = null
-    }
-    const chart = createChart(container, {
-      layout: {
-        background: { color: '#0f172a' },
-        textColor: '#94a3b8',
-      },
-      grid: {
-        vertLines: { color: '#334155' },
-        horzLines: { color: '#334155' },
-      },
-      width: container.clientWidth,
-      height: 320,
-      timeScale: {
-        timeVisible: true,
-        secondsVisible: false,
-        borderColor: '#475569',
-      },
-      rightPriceScale: {
-        borderColor: '#475569',
-        scaleMargins: { top: 0.1, bottom: 0.2 },
-      },
-    })
-    const candleSeries = chart.addCandlestickSeries({
-      upColor: '#22d3ee',
-      downColor: '#f59e0b',
-      borderUpColor: '#22d3ee',
-      borderDownColor: '#f59e0b',
-      wickUpColor: '#22d3ee',
-      wickDownColor: '#f59e0b',
-    })
-    const data = candles.map((c) => ({
-      time: c.time,
-      open: c.open,
-      high: c.high,
-      low: c.low,
-      close: c.close,
-    }))
-    candleSeries.setData(data)
-    chart.timeScale().fitContent()
-    chartInstance.current = chart
-    const handleResize = () => {
-      if (chartInstance.current) chartInstance.current.applyOptions({ width: container.clientWidth })
-    }
-    window.addEventListener('resize', handleResize)
-    return () => {
-      window.removeEventListener('resize', handleResize)
-      if (chartInstance.current) {
-        chartInstance.current.remove()
-        chartInstance.current = null
-      }
-    }
-  }, [candles])
-
   return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between">
-        <div className="flex gap-1">
-          {['1m', '5m', '15m', '1d'].map((tf) => (
-            <button
-              key={tf}
-              type="button"
-              onClick={() => onTimeframeChange && onTimeframeChange(tf)}
-              className={`px-2 py-1 text-xs font-mono rounded ${timeframe === tf ? 'bg-cyan-500/30 text-cyan-300 border border-cyan-500/50' : 'text-slate-400 hover:text-slate-200 border border-slate-600'}`}
-            >
-              {tf}
-            </button>
-          ))}
-        </div>
-        <span className="text-xs text-slate-500">NIFTY • Candles (Angel One style)</span>
-      </div>
-      <div ref={chartRef} className="rounded-lg overflow-hidden min-h-[320px]" />
-      {(!candles || candles.length === 0) && (
-        <div className="flex items-center justify-center py-8 text-slate-500 text-sm">Loading candles… (ensure backend has candle data)</div>
-      )}
-    </div>
+    <div className="text-slate-500 text-sm">Candlestick chart disabled in fast scalping mode.</div>
   )
 }
 
@@ -542,8 +458,6 @@ export default function App() {
   const [signals, setSignals] = useState({})
   const [optionChain, setOptionChain] = useState({})
   const [oi, setOi] = useState({})
-  const [candles, setCandles] = useState([])
-  const [candleTimeframe, setCandleTimeframe] = useState('5m')
   const [orders, setOrders] = useState([])
   const [error, setError] = useState(null)
   const [lastUpdate, setLastUpdate] = useState(null)
@@ -574,12 +488,11 @@ export default function App() {
 
   const load = async () => {
     try {
-      const [marketRes, signalsRes, chainRes, oiRes, candlesRes, regimeRes, liqRes, stopRes, finalRes, historyRes] = await Promise.all([
+      const [marketRes, signalsRes, chainRes, oiRes, regimeRes, liqRes, stopRes, finalRes, historyRes] = await Promise.all([
         fetchMarket(),
         fetchSignals(),
         fetchOptionChain().catch(() => ({ NIFTY: {} })),
         fetchOi().catch(() => ({})),
-        fetchCandles('NIFTY', candleTimeframe, 200).catch(() => []),
         fetchMarketRegime().catch(() => ({ market_regime: {} })),
         fetchLiquidityMap().catch(() => ({ liquidity_map: {} })),
         fetchStopHunts().catch(() => ({ stop_hunts: {} })),
@@ -590,7 +503,6 @@ export default function App() {
       setSignals(signalsRes.signals || {})
       setOptionChain(chainRes?.NIFTY ? { NIFTY: chainRes.NIFTY } : chainRes || {})
       setOi(oiRes || {})
-      setCandles(Array.isArray(candlesRes) ? candlesRes : [])
       setMarketRegime(regimeRes.market_regime || {})
       setLiquidityMap(liqRes.liquidity_map || {})
       setStopHunts(stopRes.stop_hunts || {})
@@ -608,12 +520,7 @@ export default function App() {
     load()
     const t = setInterval(load, 3000)
     return () => clearInterval(t)
-  }, [candleTimeframe])
-
-  const handleCandleTimeframeChange = (tf) => {
-    setCandleTimeframe(tf)
-    fetchCandles('NIFTY', tf, 200).then(setCandles).catch(() => setCandles([]))
-  }
+  }, [])
 
   return (
     <div className="min-h-screen bg-slate-950">
@@ -660,13 +567,9 @@ export default function App() {
           </div>
         </section>
 
-        <section className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
-          <div className="lg:col-span-2 rounded-lg border border-slate-700 bg-slate-900/50 p-4 relative">
-            <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">NIFTY – Candles (Angel One style)</h2>
-            <NiftyCandleChart candles={candles} timeframe={candleTimeframe} onTimeframeChange={handleCandleTimeframeChange} />
-          </div>
+        <section className="mb-8">
+          <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Placed orders (paper)</h2>
           <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-4">
-            <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Placed orders (paper)</h2>
             <PlacedOrders orders={orders} onExit={exitOrder} />
           </div>
         </section>

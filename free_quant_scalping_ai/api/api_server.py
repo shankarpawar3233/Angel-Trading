@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import datetime, timezone
-from typing import Dict
+from typing import Any, Dict, Optional
 
 import pandas as pd
 
@@ -18,46 +18,14 @@ from data.data_storage import (
     get_signal_history,
     init_schema,
     insert_option_ticks,
-    latest_option_chain,
     load_candles,
-    store_regime,
     store_signal,
 )
 from data.historical_fetcher import bootstrap_historical_data
 from data.live_price import get_live_price
-from features.gamma_exposure import compute_gamma_exposure, compute_gamma_walls, detect_gamma_squeeze
-from features.liquidity_map import build_liquidity_map, detect_liquidity_clusters
-from features.market_maker_model import compute_market_maker_position
-from features.smart_money_flow import compute_smart_money_flow
-from features.max_pain import compute_max_pain
-from features.market_regime import detect_market_regime
-from features.oi_analysis import compute_oi_analysis
-from features.feature_engineering import engineer_all_features
-from strategies.ce_pe_signal_engine import build_final_signal, merge_signals
-from strategies.liquidity_trap_detector import detect_liquidity_trap
-from strategies.stop_hunt_detector import detect_stop_hunt
-
-try:
-    from models.predictor import CombinedPredictor
-    _HAS_PREDICTOR = True
-except Exception:
-    CombinedPredictor = None
-    _HAS_PREDICTOR = False
-
-try:
-    from reinforcement.rl_agent import RLTradingAgent
-    _HAS_RL = True
-except Exception:
-    RLTradingAgent = None
-    _HAS_RL = False
-from strategies.expiry_direction import compute_expiry_direction
-from strategies.expiry_prediction_engine import expiry_prediction
-from strategies.gamma_exposure_engine import analyze_gamma
-from strategies.hero_zero_detector import detect_hero_zero
-from strategies.hero_zero_live import detect_hero_zero_live
-from strategies.institutional_flow_engine import detect_institutional_flow_from_chain
-from strategies.liquidity_sweep_detector import detect_liquidity_sweep
-from strategies.scalping_engine import generate_scalping_signal
+from fast_features import compute_fast_features
+from hero_zero_fast import detect_hero_zero_fast
+from scalping_fast import compute_fast_confidence, generate_fast_scalping_signal
 from training.daily_trainer import train_models
 from utils.logger import get_logger
 
@@ -85,6 +53,7 @@ state: Dict[str, Dict] = {
     "market": {},
     "signals": {},
     "final_signal": {},
+    "fast_signals": {},
     "market_regime": {},
     "liquidity_map": {},
     "stop_hunts": {},
@@ -94,244 +63,188 @@ state: Dict[str, Dict] = {
 _scheduler: BackgroundScheduler | None = None
 
 
-async def compute_for_symbol(symbol: str):
-    # Try intraday first; if unavailable fall back to higher timeframes
-    candles = load_candles(symbol, "1m", limit=800)
-    if candles.empty:
-        candles = load_candles(symbol, "5m", limit=800)
-    if candles.empty:
-        candles = load_candles(symbol, "15m", limit=800)
-    if candles.empty:
-        candles = load_candles(symbol, "1d", limit=800)
-
-    feats = engineer_all_features(candles)
-    if feats.empty:
-        return
-
-    feature_names = [
-        c
-        for c in feats.columns
-        if c
-        not in {"ts", "open", "high", "low", "close", "volume", "support", "resistance"}
-    ]
-
-    model_version: str | None = None
-    if _HAS_PREDICTOR and CombinedPredictor is not None:
-        predictor = CombinedPredictor(feature_names)
-        ml_decision = predictor.predict(feats)
-        model_version = predictor.model_version
-    else:
-        ml_decision = {"label": "NO_TRADE", "probs": {"BUY_CE": 0.33, "BUY_PE": 0.33, "NO_TRADE": 0.34}}
-
-    import numpy as np
-    X = feats[feature_names].values.astype("float32")
-    X = np.nan_to_num(X, nan=0.0)
-    prices = feats["close"].values.astype("float32")
-    if not _HAS_RL or RLTradingAgent is None or len(X) < 100:
-        rl_decision = {"action": "HOLD"}
-    else:
-        agent = RLTradingAgent(features=X, prices=prices)
-        agent.train(timesteps=2_000)
-        rl_decision = agent.predict_action(X[-1])
-
-    # Option chain: Angel WebSocket only (no NSE). Fallback to DB only if stream not yet populated.
+def _store_fast_signal_safe(symbol: str, ts: datetime, payload: Dict[str, Any]) -> None:
+    """Synchronous helper for writing fast signals to DB (can be run in executor)."""
     try:
-        from data.angel_option_stream import get_live_option_chain_snapshot
-        from features.option_chain_builder import option_chain_to_dataframe
-        snap = get_live_option_chain_snapshot()
-        option_chain = option_chain_to_dataframe(snap, symbol_prefix=symbol)
-        if option_chain.empty:
-            option_chain = latest_option_chain(symbol)
-    except Exception:
-        option_chain = latest_option_chain(symbol)
-    if not option_chain.empty and "change_oi" not in option_chain.columns and "oi_change" in option_chain.columns:
-        option_chain = option_chain.copy()
-        option_chain["change_oi"] = option_chain["oi_change"]
-    if not option_chain.empty:
-        logger.info("[CHAIN] option chain loaded: %s rows", len(option_chain))
+        payload_json = json.dumps(payload, default=str)
+        store_signal(
+            symbol=symbol,
+            ts=ts,
+            category="final_fast",
+            payload_json=payload_json,
+        )
+    except Exception as exc:
+        logger.debug("Failed to store fast signal for %s: %s", symbol, exc)
+
+
+async def compute_for_symbol(symbol: str):
+    """
+    High-performance live path:
+      1) read latest Angel live price
+      2) read fast in-memory option chain snapshot (no pandas)
+      3) compute fast features
+      4) generate scalping + hero-zero signals
+      5) compute lightweight confidence
+      6) update fast state and (optionally) persist
+    """
+    from data.angel_option_stream import get_live_option_chain_snapshot
 
     live_info = get_live_price(symbol)
-    live_price = live_info.get("price")
-    price_source = live_info.get("source") if live_price is not None else "cached"
-    index_price = live_price if live_price is not None else (float(candles["close"].iloc[-1]) if not candles.empty else None)
-    scalping = generate_scalping_signal(
-        symbol, candles, option_chain, ml_decision, rl_decision, live_price_override=live_price
-    )
-    # Hero-Zero: use live detector when we have option chain with ltp/volume
-    if not option_chain.empty and "ltp" in option_chain.columns and "volume" in option_chain.columns:
-        hero_zero = detect_hero_zero_live(option_chain, index_price or 0.0)
-    else:
-        hero_zero = detect_hero_zero(symbol, option_chain, index_price or 0.0)
-    inst = detect_institutional_flow_from_chain(option_chain)
-    sweep = detect_liquidity_sweep(candles)
-    gamma = analyze_gamma(symbol, option_chain)
-    oi_analysis = compute_oi_analysis(option_chain) if not option_chain.empty else {}
-    if oi_analysis and oi_analysis.get("pcr") is not None:
-        logger.info("[OI] PCR calculated: %s", oi_analysis.get("pcr"))
-    gamma_exposure = (
-        compute_gamma_exposure(option_chain, price=index_price) if not option_chain.empty else {}
-    )
-    if not option_chain.empty:
-        gamma_walls = compute_gamma_walls(option_chain)
-        gamma_exposure.update(gamma_walls)
-    max_pain_result = compute_max_pain(option_chain) if not option_chain.empty else {}
-    if max_pain_result.get("max_pain") is not None:
-        logger.info("[MAXPAIN] strike calculated: %s", max_pain_result.get("max_pain"))
-    # PCR + Gamma + MaxPain convergence
-    convergence_result = {}
-    if index_price and (oi_analysis or gamma_exposure or max_pain_result):
+    price = live_info.get("price") or 0.0
+    price_source = live_info.get("source") if live_info.get("price") is not None else "cached"
+
+    chain_snapshot = get_live_option_chain_snapshot()
+
+    # Maintain short price history per symbol in process memory
+    history = state.setdefault("_price_history", {})
+    sym_hist = history.get(symbol) or []
+    if price > 0:
+        sym_hist.append(float(price))
+        if len(sym_hist) > 128:
+            sym_hist = sym_hist[-128:]
+    history[symbol] = sym_hist
+
+    features = compute_fast_features(chain_snapshot, float(price or 0.0), sym_hist)
+    scalping_signal = generate_fast_scalping_signal(features)
+    hero_zero = detect_hero_zero_fast(chain_snapshot, float(price or 0.0))
+    confidence = compute_fast_confidence(features)
+
+    # Derive strike + entry/target/stoploss from fast chain when we have a directional trade
+    strike_label: Optional[str] = None
+    entry: Optional[float] = None
+    target: Optional[float] = None
+    stoploss: Optional[float] = None
+
+    def _select_fast_strike(
+        chain: Dict[str, Dict[str, Dict[str, Any]]],
+        ref_price: float,
+        trade: str,
+    ) -> Optional[Dict[str, Any]]:
+        if not chain or ref_price <= 0:
+            return None
+        side = "CE" if trade == "BUY_CE" else "PE" if trade == "BUY_PE" else None
+        if side is None:
+            return None
         try:
-            from strategies.convergence_engine import compute_convergence
-            convergence_result = compute_convergence(
-                price=index_price,
-                pcr=oi_analysis.get("pcr") if oi_analysis else None,
-                call_wall=gamma_exposure.get("call_wall") or gamma_exposure.get("gamma_wall_call"),
-                put_wall=gamma_exposure.get("put_wall") or gamma_exposure.get("gamma_wall_put"),
-                max_pain=max_pain_result.get("max_pain") if max_pain_result else None,
-            )
-        except Exception as e:
-            logger.debug("[CONVERGENCE] %s", e)
-    if convergence_result.get("bias"):
-        logger.info("[CONVERGENCE] bias detected: %s strength=%s", convergence_result.get("bias"), convergence_result.get("strength", 0))
-    expiry = expiry_prediction(
-        symbol, option_chain,
-        spot_price=index_price,
-        gamma_walls=gamma_exposure if not option_chain.empty else None,
-        institutional_flow=inst,
-    )
-    expiry_bias = compute_expiry_direction(
-        spot_price=index_price or 0.0,
-        max_pain=max_pain_result.get("max_pain"),
-        pcr=oi_analysis.get("pcr"),
-        gamma_wall_call=gamma_exposure.get("gamma_wall_call"),
-        gamma_wall_put=gamma_exposure.get("gamma_wall_put"),
-        option_chain=option_chain if not option_chain.empty else None,
-    )
+            strikes = sorted(float(s) for s in chain.keys())
+        except Exception:
+            return None
+        if not strikes:
+            return None
+        # Basic ATM step
+        step = strikes[1] - strikes[0] if len(strikes) > 1 else 50.0
+        atm = min(strikes, key=lambda s: abs(s - ref_price))
+        candidates: list[float] = [atm]
+        if trade == "BUY_CE":
+            up = atm + step
+            if up in strikes:
+                candidates.append(up)
+        elif trade == "BUY_PE":
+            down = atm - step
+            if down in strikes:
+                candidates.append(down)
+        for s_val in candidates:
+            key = str(int(s_val))
+            row = chain.get(key) or {}
+            leg = row.get(side)
+            if not isinstance(leg, dict):
+                continue
+            ltp = leg.get("ltp")
+            vol = float(leg.get("volume") or 0.0)
+            oi = float(leg.get("oi") or 0.0)
+            if ltp is None or vol <= 0 or oi <= 0:
+                continue
+            try:
+                premium = float(ltp)
+            except (TypeError, ValueError):
+                continue
+            return {"strike": s_val, "type": side, "premium": premium}
+        return None
 
-    # Liquidity map (OI + volume + gamma) + liquidity clusters
-    liquidity_map = {}
-    if not option_chain.empty:
-        liquidity_map = build_liquidity_map(
-            option_chain,
-            gamma_levels=gamma_exposure.get("gamma_levels"),
-        )
-        clusters = detect_liquidity_clusters(option_chain)
-        liquidity_map["stop_clusters"] = clusters.get("stop_clusters", [])
+    if scalping_signal in ("BUY_CE", "BUY_PE"):
+        sel = _select_fast_strike(chain_snapshot, float(price or 0.0), scalping_signal)
+        if sel:
+            s_val = sel["strike"]
+            premium = sel["premium"]
+            strike_label = f"{int(s_val)} {'CE' if scalping_signal == 'BUY_CE' else 'PE'}"
+            entry = premium
+            target = round(premium * 1.4, 2)
+            stoploss = round(premium * 0.8, 2)
 
-    # Market regime (EMA, VWAP, ATR, RSI, volume)
-    regime_result = detect_market_regime(candles)
-    try:
-        from models.regime_hmm import predict_regime_hmm
-        hmm_regime = predict_regime_hmm(candles)
-        regime_result["hmm_probabilities"] = hmm_regime.get("probabilities")
-        regime_result["confidence"] = max(regime_result.get("confidence", 0), hmm_regime.get("confidence", 0))
-    except Exception:
-        pass
-
-    # Stop-hunt detection
-    stop_hunt_result = detect_stop_hunt(candles, option_chain, liquidity_map)
-    # Liquidity trap
-    liquidity_trap_result = detect_liquidity_trap(candles, option_chain, liquidity_map) if liquidity_map else {"trap_detected": False, "trap_type": None, "confidence": 0}
-    # Market maker positioning
-    dealer_position_result = compute_market_maker_position(option_chain, spot=index_price) if not option_chain.empty else {}
-    # Gamma squeeze
-    gamma_squeeze_result = detect_gamma_squeeze(option_chain, index_price or 0.0) if not option_chain.empty else {}
-    # Smart money: price change from last few candles
-    price_change = 0.0
-    if not candles.empty and len(candles) >= 5:
-        price_change = float(candles["close"].iloc[-1] - candles["close"].iloc[-5]) / (float(candles["close"].iloc[-5]) + 1e-9)
-    smart_money_result = compute_smart_money_flow(option_chain, price_change) if not option_chain.empty else {}
-
-    fused = merge_signals(
-        ml_decision, rl_decision, scalping, hero_zero, inst, gamma, expiry, sweep, model_version=model_version,
-        oi_analysis=oi_analysis,
-        gamma_exposure=gamma_exposure,
-        max_pain=max_pain_result,
-        expiry_bias=expiry_bias,
-        liquidity_map=liquidity_map,
-        regime=regime_result,
-        stop_hunt=stop_hunt_result,
-        dealer_position=dealer_position_result,
-        gamma_squeeze=gamma_squeeze_result,
-        smart_money=smart_money_result,
-        liquidity_trap=liquidity_trap_result,
-        convergence=convergence_result,
-    )
-
-    final_signal = build_final_signal(symbol, index_price or 0.0, fused, option_chain=option_chain if not option_chain.empty else None)
+    final_fast = {
+        "symbol": symbol,
+        "price": float(price or 0.0),
+        "signal": scalping_signal,
+        "confidence": confidence,
+        "hero_zero": hero_zero,
+        "strike": strike_label,
+        "entry": entry,
+        "target": target,
+        "stoploss": stoploss,
+        "price_source": price_source,
+    }
 
     ts = datetime.now(timezone.utc)
     state["market"][symbol] = {
         "symbol": symbol,
-        "last_price": index_price,
+        "last_price": float(price or 0.0),
         "ts": ts.isoformat(),
         "price_source": price_source,
     }
-    state["signals"][symbol] = fused
-    state["final_signal"][symbol] = final_signal
-    state["market_regime"][symbol] = regime_result
-    state["liquidity_map"][symbol] = liquidity_map
-    state["stop_hunts"][symbol] = stop_hunt_result
+    state["fast_signals"][symbol] = final_fast
 
-    # Store regime history
-    store_regime(
-        symbol=symbol,
-        ts=ts,
-        regime=regime_result.get("regime", "RANGE"),
-        confidence=regime_result.get("confidence"),
-        payload_json=json.dumps(regime_result, default=str),
-    )
+    # Backwards-compatible minimal final_signal for existing UI (trade/hero_zero/confidence)
+    state["final_signal"][symbol] = {
+        "symbol": symbol,
+        "price": float(price or 0.0),
+        "trade": scalping_signal,
+        "confidence": confidence,
+        "hero_zero": hero_zero,
+        "entry": entry,
+        "target": target,
+        "stoploss": stoploss,
+        "strike": strike_label,
+        "regime": None,
+        "gamma_wall": None,
+        "max_pain": None,
+        "institutional_flow": None,
+    }
 
-    # Store combined JSON signal
-    store_signal(
-        symbol=symbol,
-        ts=ts,
-        category="combined",
-        payload_json=json.dumps(fused, default=str),
-    )
-    # Store final signal for history (dashboard)
-    store_signal(
-        symbol=symbol,
-        ts=ts,
-        category="final",
-        payload_json=json.dumps(final_signal, default=str),
-    )
+    # Conditional, rate-limited, async DB write:
+    #   - only when signal != NO_TRADE OR confidence >= 60
+    #   - at most once every 10 seconds per symbol
+    if scalping_signal != "NO_TRADE" or confidence >= 60:
+        cooldown_state = state.setdefault("_fast_store_cooldown", {})
+        last_ts = cooldown_state.get(symbol)
+        allow_write = True
+        if isinstance(last_ts, datetime):
+            delta = (ts - last_ts).total_seconds()
+            if delta < 10.0:
+                allow_write = False
+        if allow_write:
+            cooldown_state[symbol] = ts
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+            if loop is not None:
+                loop.run_in_executor(None, _store_fast_signal_safe, symbol, ts, final_fast)
+            else:
+                _store_fast_signal_safe(symbol, ts, final_fast)
 
-    # Section 18 logging
-    logger.info("[REGIME] Market regime detected: %s (confidence %s)", regime_result.get("regime"), regime_result.get("confidence"))
-    if hero_zero.get("candidates"):
-        logger.info("[HERO] Hero-zero candidate: %s", hero_zero["candidates"][0].get("strike"))
-    if gamma_exposure.get("gamma_wall_call") or gamma_exposure.get("gamma_wall_put"):
-        logger.info("[GAMMA] Gamma wall detected call=%s put=%s", gamma_exposure.get("gamma_wall_call"), gamma_exposure.get("gamma_wall_put"))
-    if inst.get("flow_type") and inst.get("flow_type") != "NEUTRAL":
-        logger.info("[FLOW] Institutional buildup: %s", inst.get("flow_type"))
-    if stop_hunt_result.get("detected"):
-        logger.info("[STOPHUNT] Liquidity grab detected: %s", stop_hunt_result.get("stop_hunt_zone"))
+    if scalping_signal != "NO_TRADE":
+        logger.info("[FAST SIGNAL] %s price=%s confidence=%s", scalping_signal, price, confidence)
 
-    scalping_sig = scalping.get("signal")
-    logger.info(
-        "LIVE SIGNAL %s price=%s trade=%s confidence=%s scalping=%s hero_zero=%s inst=%s gamma=%s expiry=%s",
-        symbol,
-        index_price,
-        final_signal.get("trade"),
-        final_signal.get("confidence"),
-        scalping_sig,
-        hero_zero.get("candidates"),
-        inst.get("summary"),
-        gamma,
-        expiry.get("prediction"),
-    )
 
 
 async def main_loop():
     while True:
-        logger.info("Main loop tick...")
         for symbol in settings.indices:
             try:
                 await compute_for_symbol(symbol)
             except Exception as exc:
                 logger.exception("Error in main loop for %s: %s", symbol, exc)
-        await asyncio.sleep(5)  # run every 5 seconds
+        await asyncio.sleep(0.5)  # low-latency cadence
 
 
 def _persist_option_ticks():
@@ -359,6 +272,7 @@ async def startup_event():
     # Scheduler for daily training and optional option-tick persist
     if _scheduler is None:
         _scheduler = BackgroundScheduler(timezone="UTC")
+    # Keep daily trainer but it no longer affects live path
     _scheduler.add_job(
         train_models,
         trigger="cron",
@@ -375,7 +289,8 @@ async def startup_event():
         from data.angel_option_stream import start_option_stream
         live_info = get_live_price("NIFTY")
         index_price = live_info.get("price") if live_info else None
-        tokens = get_subscription_tokens(index_price=index_price, atm_band=20, max_tokens=200)
+        # Tight ATM band and limited tokens for low-latency operation
+        tokens = get_subscription_tokens(index_price=index_price, atm_band=5, max_tokens=50)
         if tokens:
             logger.info("[OPTIONS] Discovered %s NIFTY contracts for streaming", len(tokens))
             if start_option_stream(tokens):
@@ -603,14 +518,44 @@ async def websocket_signals(ws: WebSocket):
     try:
         while True:
             await ws.send_json({
-                "market": state["market"],
-                "signals": state["signals"],
-                "final_signal": state.get("final_signal", {}),
-                "market_regime": state.get("market_regime", {}),
-                "liquidity_map": state.get("liquidity_map", {}),
-                "stop_hunts": state.get("stop_hunts", {}),
+                "fast": state.get("fast_signals", {}),
             })
-            await asyncio.sleep(2)
+            await asyncio.sleep(0.5)
     except WebSocketDisconnect:
         logger.info("WebSocket client disconnected")
+
+
+@app.websocket("/ws/fast")
+async def websocket_fast(ws: WebSocket):
+    """
+    Lightweight, low-latency WebSocket endpoint.
+
+    Sends only: symbol, price, signal, confidence, hero_zero
+    for each symbol, every 300–500ms. Payload is event-like: if there is no
+    fast signal yet, the map may be empty.
+    """
+    await ws.accept()
+    last_payload: Dict[str, Any] | None = None
+    try:
+        while True:
+            fast = state.get("fast_signals", {})
+            # Strip to required fields only
+            slim: Dict[str, Any] = {}
+            for sym, sig in fast.items():
+                if not isinstance(sig, dict):
+                    continue
+                slim[sym] = {
+                    "symbol": sym,
+                    "price": sig.get("price"),
+                    "signal": sig.get("signal"),
+                    "confidence": sig.get("confidence"),
+                    "hero_zero": sig.get("hero_zero"),
+                }
+            # Prefer event-driven push: only send when payload changes
+            if slim != last_payload:
+                await ws.send_json(slim)
+                last_payload = slim
+            await asyncio.sleep(0.3)
+    except WebSocketDisconnect:
+        logger.info("Fast WebSocket client disconnected")
 

@@ -264,7 +264,7 @@ def get_signal_history(
         SELECT ts, payload_json
         FROM signals
         WHERE symbol = ? AND category = ?
-        ORDER BY ts ASC
+        ORDER BY ts DESC
         LIMIT ?
     """
     with get_connection() as conn:
