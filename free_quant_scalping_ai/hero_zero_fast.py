@@ -69,12 +69,15 @@ def detect_hero_zero_fast(chain: ChainDict, price: float) -> Optional[Dict[str, 
             vol = float(leg.get("volume") or 0.0)
             oi = float(leg.get("oi") or 0.0)
             ch = float(leg.get("change_oi") or 0.0)
-            if ltp <= 0 or vol <= 0 or oi <= 0:
+            if ltp <= 0 or vol <= 0:
                 continue
 
             # simple spikes
             vol_spike = vol > 2.0 * avg_vol
             oi_spike = (oi > 1.5 * avg_oi) or (ch > 2.0 * avg_change_up if avg_change_up > 0 else ch > 0)
+            # If OI is unavailable from feed, allow strong volume-only hero-zero candidates.
+            if oi <= 0:
+                oi_spike = vol > 2.5 * avg_vol
             if not (vol_spike and oi_spike):
                 continue
 

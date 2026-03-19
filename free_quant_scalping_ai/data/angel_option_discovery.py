@@ -195,14 +195,26 @@ def get_subscription_tokens(
     """
     Return a list of {symbol, token} for WebSocket subscription.
     Uses discover_nifty_options (NFO, name NIFTY, OPTIDX) then ATM ± atm_band strikes.
-    Example: [{"symbol": "NIFTY24MAR23150CE", "token": "12345"}, ...]
+
+    Contracts are ordered by distance to spot (nearest ATM first). Previously they were
+    sorted by strike ascending, so [:max_tokens] picked the *lowest* strikes in the band
+    (far below spot) — those rarely tick; the chain stayed empty.
     """
     contracts = discover_nifty_options(index_price=index_price, atm_band=atm_band)
     if not contracts:
         contracts = discover_nifty_option_tokens(
             index_price=index_price,
             atm_band=atm_band,
-            max_contracts=max_tokens // 2,
+            max_contracts=max(500, max_tokens * 4),
         )
+    ref = float(index_price) if index_price is not None else None
+    if ref is not None and contracts:
+
+        def _key(c: Dict[str, Any]) -> Tuple[float, str]:
+            return (abs(float(c["strike"]) - ref), str(c.get("symbol", "")))
+
+        contracts = sorted(contracts, key=_key)
+    elif contracts:
+        contracts = sorted(contracts, key=lambda c: float(c["strike"]))
     out = [{"symbol": c["symbol"], "token": c["token"]} for c in contracts[:max_tokens]]
     return out

@@ -51,6 +51,11 @@ def compute_oi_analysis(
     if "change_oi" not in df.columns:
         df["change_oi"] = 0.0
 
+    # Normalize numeric dtypes (avoids object downcast warnings and unstable ratios).
+    for col in ("strike", "oi", "change_oi", "volume", "ltp"):
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
     # PCR: Put Call Ratio = total_put_oi / total_call_oi
     ce_oi = df.loc[df["option_type"] == "CE", "oi"].sum()
     pe_oi = df.loc[df["option_type"] == "PE", "oi"].sum()

@@ -27,14 +27,21 @@ def generate_fast_scalping_signal(features: Dict[str, Any]) -> str:
     put_vol = float(features.get("put_volume_strength") or 0.0)
     mom = float(features.get("price_momentum") or 0.0)
 
-    # Thresholds tuned for robustness
-    CALL_THRESH = 0.6
-    PUT_THRESH = 0.6
-    MOM_UP = 0.0005   # 5 bps
-    MOM_DOWN = -0.0005
+    # Slightly relaxed thresholds for live feeds where OI may be sparse.
+    CALL_THRESH = 0.45
+    PUT_THRESH = 0.45
+    VOL_THRESH = 0.50
+    MOM_UP = 0.0002   # 2 bps
+    MOM_DOWN = -0.0002
 
-    buy_ce = call_oi >= CALL_THRESH and call_vol >= CALL_THRESH and mom >= MOM_UP
-    buy_pe = put_oi >= PUT_THRESH and put_vol >= PUT_THRESH and mom <= MOM_DOWN
+    oi_available = (call_oi > 0.0) or (put_oi > 0.0)
+    if oi_available:
+        buy_ce = call_oi >= CALL_THRESH and call_vol >= VOL_THRESH and mom >= MOM_UP
+        buy_pe = put_oi >= PUT_THRESH and put_vol >= VOL_THRESH and mom <= MOM_DOWN
+    else:
+        # Fallback when OI is unavailable: rely on volume imbalance + momentum.
+        buy_ce = call_vol >= 0.60 and call_vol > put_vol and mom >= MOM_UP
+        buy_pe = put_vol >= 0.60 and put_vol > call_vol and mom <= MOM_DOWN
 
     # Avoid conflicting signals (both sides active)
     if buy_ce and buy_pe:
