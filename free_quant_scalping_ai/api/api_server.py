@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 import pandas as pd
@@ -25,7 +27,7 @@ from data.data_storage import (
 from data.historical_fetcher import bootstrap_historical_data
 from fast_features import compute_fast_features
 from hero_zero_fast import detect_hero_zero_fast
-from scalping_fast import compute_fast_confidence, generate_fast_scalping_signal
+from scalping_fast import compute_fast_confidence, generate_fast_scalping_signal, generate_ml_signal
 from training.daily_trainer import train_models
 from utils.logger import get_logger
 
@@ -61,6 +63,7 @@ state: Dict[str, Dict] = {
 }
 
 _scheduler: BackgroundScheduler | None = None
+_SIGNAL_LOG_PATH = Path(os.getenv("SIGNAL_RECORD_FILE", "logs/signal_events.jsonl"))
 
 
 def _store_fast_signal_safe(symbol: str, ts: datetime, payload: Dict[str, Any]) -> None:
@@ -77,6 +80,29 @@ def _store_fast_signal_safe(symbol: str, ts: datetime, payload: Dict[str, Any]) 
         logger.debug("Failed to store fast signal for %s: %s", symbol, exc)
 
 
+def _append_signal_record_safe(symbol: str, ts: datetime, payload: Dict[str, Any]) -> None:
+    """Append compact signal events to a local JSONL file for debugging/audit."""
+    try:
+        _SIGNAL_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        row = {
+            "ts": ts.isoformat(),
+            "symbol": symbol,
+            "signal": payload.get("signal"),
+            "entry_decision": payload.get("entry_decision"),
+            "decision_reason": payload.get("decision_reason"),
+            "confidence": payload.get("confidence"),
+            "price": payload.get("price"),
+            "strike": payload.get("strike"),
+            "entry": payload.get("entry"),
+            "target": payload.get("target"),
+            "stoploss": payload.get("stoploss"),
+        }
+        with _SIGNAL_LOG_PATH.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(row, ensure_ascii=True, default=str) + "\n")
+    except Exception as exc:
+        logger.debug("Failed to append signal record for %s: %s", symbol, exc)
+
+
 async def compute_for_symbol(symbol: str):
     """
     High-performance live path:
@@ -90,9 +116,81 @@ async def compute_for_symbol(symbol: str):
     from data.angel_ws_manager import get_option_chain_copy, get_ws_price
 
     su = symbol.upper()
+
+    def _publish_waiting_state(reason: str) -> None:
+        ts = datetime.now(timezone.utc)
+        waiting = {
+            "symbol": symbol,
+            "price": 0.0,
+            "signal": "NO_TRADE",
+            "trade": "NO_TRADE",
+            "confidence": 0,
+            "entry_decision": "HOLD",
+            "decision_reason": reason,
+            "stable_count": 0,
+            "lock_remaining_sec": 0,
+            "hero_zero": None,
+            "strike": None,
+            "entry": None,
+            "target": None,
+            "stoploss": None,
+            "price_source": "waiting_live",
+        }
+        state["market"][symbol] = {
+            "symbol": symbol,
+            "last_price": None,
+            "ts": ts.isoformat(),
+            "price_source": "waiting_live",
+        }
+        state["fast_signals"][symbol] = waiting
+        state["signals"][symbol] = {
+            "trade": "NO_TRADE",
+            "confidence": 0,
+            "entry_decision": "HOLD",
+            "decision_reason": reason,
+            "stable_count": 0,
+            "lock_remaining_sec": 0,
+            "hero_zero": [],
+            "oi_analysis": {"pcr": 0.0, "ce_oi_total": 0.0, "pe_oi_total": 0.0, "max_oi_call": None, "max_oi_put": None, "oi_spikes": []},
+            "ml": {"label": "NO_TRADE", "confidence": 0},
+            "scalping": {
+                "trade": "NO_TRADE",
+                "confidence": 0,
+                "entry_decision": "HOLD",
+                "decision_reason": reason,
+                "stable_count": 0,
+                "strike": None,
+                "entry": None,
+                "target": None,
+                "stoploss": None,
+            },
+            "symbol": symbol,
+            "price": 0.0,
+        }
+        state["final_signal"][symbol] = {
+            "symbol": symbol,
+            "price": 0.0,
+            "trade": "NO_TRADE",
+            "confidence": 0,
+            "entry_decision": "HOLD",
+            "decision_reason": reason,
+            "stable_count": 0,
+            "lock_remaining_sec": 0,
+            "hero_zero": None,
+            "entry": None,
+            "target": None,
+            "stoploss": None,
+            "strike": None,
+            "regime": None,
+            "gamma_wall": None,
+            "max_pain": None,
+            "institutional_flow": None,
+        }
+
     price = get_ws_price(su)
     chain_snapshot = get_option_chain_copy(su)
     if not price or float(price) <= 0:
+        _publish_waiting_state("waiting_index_price")
         return
     price = float(price)
     price_source = "angel_ws"
@@ -115,9 +213,11 @@ async def compute_for_symbol(symbol: str):
                 logger.debug("[LIVE] NIFTY chain from NSE fallback, strikes=%s", len(chain_snapshot))
         if not chain_snapshot:
             print("[SKIP] No live data", symbol, price, 0)
+            _publish_waiting_state("waiting_option_chain")
             return
     if su == "SENSEX" and not chain_snapshot:
         print("[SKIP] No live data", symbol, price, 0)
+        _publish_waiting_state("waiting_option_chain")
         return
 
     def _quick_oi(chain: Dict[str, Dict[str, Dict[str, Any]]]) -> Dict[str, Any]:
@@ -158,9 +258,126 @@ async def compute_for_symbol(symbol: str):
     history[symbol] = sym_hist
 
     features = compute_fast_features(chain_snapshot, float(price or 0.0), sym_hist)
-    scalping_signal = generate_fast_scalping_signal(features)
+    rule_signal = generate_fast_scalping_signal(features)
+    ml_signal = generate_ml_signal(features)
+    scalping_signal = rule_signal
     hero_zero = detect_hero_zero_fast(chain_snapshot, float(price or 0.0))
     confidence = compute_fast_confidence(features)
+    # ML fallback: if rule engine is flat, allow strong ML direction.
+    if scalping_signal == "NO_TRADE" and ml_signal.get("label") in ("BUY_CE", "BUY_PE"):
+        if int(ml_signal.get("confidence") or 0) >= 65:
+            scalping_signal = str(ml_signal["label"])
+            confidence = max(confidence, int(ml_signal["confidence"]) - 4)
+    # SENSEX fallback when OI/volume is sparse: use ATM CE/PE premium imbalance + momentum.
+    if su == "SENSEX" and scalping_signal == "NO_TRADE" and chain_snapshot:
+        try:
+            strikes = sorted(float(s) for s in chain_snapshot.keys())
+            if strikes:
+                atm = min(strikes, key=lambda s: abs(s - price))
+                row = chain_snapshot.get(str(int(atm))) or chain_snapshot.get(str(atm)) or {}
+                ce = row.get("CE") if isinstance(row, dict) else None
+                pe = row.get("PE") if isinstance(row, dict) else None
+                ce_ltp = float((ce or {}).get("ltp") or 0.0)
+                pe_ltp = float((pe or {}).get("ltp") or 0.0)
+                mom = float(features.get("price_momentum") or 0.0)
+                if ce_ltp > 0 and pe_ltp > 0:
+                    ratio = pe_ltp / max(1.0, ce_ltp)
+                    if ratio >= 1.35 and mom <= 0.0002:
+                        scalping_signal = "BUY_PE"
+                        confidence = max(confidence, 62)
+                    elif ratio <= 0.74 and mom >= -0.0002:
+                        scalping_signal = "BUY_CE"
+                        confidence = max(confidence, 62)
+        except Exception:
+            pass
+
+    # High-confidence neutral tie-breaker:
+    # when rule/ML end up NO_TRADE but feature bias is clearly one-sided, pick that side.
+    if scalping_signal == "NO_TRADE":
+        call_oi = float(features.get("call_oi_strength") or 0.0)
+        put_oi = float(features.get("put_oi_strength") or 0.0)
+        call_vol = float(features.get("call_volume_strength") or 0.0)
+        put_vol = float(features.get("put_volume_strength") or 0.0)
+        mom = float(features.get("price_momentum") or 0.0)
+        ce_bias = 0.45 * call_oi + 0.45 * call_vol + 0.10 * max(0.0, mom * 2000.0)
+        pe_bias = 0.45 * put_oi + 0.45 * put_vol + 0.10 * max(0.0, -mom * 2000.0)
+        bias_gap = abs(ce_bias - pe_bias)
+        if confidence >= 70 and bias_gap >= 0.08:
+            if ce_bias > pe_bias:
+                scalping_signal = "BUY_CE"
+            else:
+                scalping_signal = "BUY_PE"
+            confidence = max(confidence, 66 if su == "SENSEX" else 70)
+
+    # Signal stabilizer + entry lock (actionable decision layer).
+    MIN_CONF = 60 if su == "SENSEX" else 68
+    STABLE_CYCLES = 2 if su == "SENSEX" else 4
+    ENTRY_LOCK_SEC = 45.0
+    decision_state = state.setdefault("_decision_state", {})
+    ds = decision_state.setdefault(
+        symbol,
+        {
+            "last_signal": "NO_TRADE",
+            "last_directional": None,
+            "last_directional_ts": 0.0,
+            "stable_count": 0,
+            "lock_until": 0.0,
+            "active_trade": None,
+        },
+    )
+    now_sec = time.time()
+    # Hysteresis: keep last directional signal briefly to avoid neutral flicker.
+    try:
+        hold_nifty = float(os.getenv("SIGNAL_HOLD_SEC_NIFTY", "10"))
+    except ValueError:
+        hold_nifty = 10.0
+    try:
+        hold_sensex = float(os.getenv("SIGNAL_HOLD_SEC_SENSEX", "12"))
+    except ValueError:
+        hold_sensex = 12.0
+    HOLD_SEC = hold_sensex if su == "SENSEX" else hold_nifty
+    if scalping_signal in ("BUY_CE", "BUY_PE"):
+        ds["last_directional"] = scalping_signal
+        ds["last_directional_ts"] = now_sec
+    elif scalping_signal == "NO_TRADE":
+        last_dir = ds.get("last_directional")
+        last_ts = float(ds.get("last_directional_ts") or 0.0)
+        if last_dir in ("BUY_CE", "BUY_PE") and (now_sec - last_ts) <= HOLD_SEC:
+            scalping_signal = str(last_dir)
+            confidence = max(confidence, 60 if su == "SENSEX" else 64)
+
+    if scalping_signal in ("BUY_CE", "BUY_PE"):
+        if ds.get("last_signal") == scalping_signal:
+            ds["stable_count"] = int(ds.get("stable_count") or 0) + 1
+        else:
+            ds["stable_count"] = 1
+    else:
+        ds["stable_count"] = 0
+    ds["last_signal"] = scalping_signal
+
+    # Unlock previous trade once lock expires.
+    if float(ds.get("lock_until") or 0.0) <= now_sec:
+        ds["active_trade"] = None
+
+    locked = float(ds.get("lock_until") or 0.0) > now_sec
+    lock_remaining = max(0.0, float(ds.get("lock_until") or 0.0) - now_sec)
+    stable_count = int(ds.get("stable_count") or 0)
+    entry_decision = "HOLD"
+    decision_reason = "no_trade_signal"
+    if locked:
+        decision_reason = f"entry_lock_active_{int(round(lock_remaining))}s"
+    elif scalping_signal not in ("BUY_CE", "BUY_PE"):
+        decision_reason = "signal_not_directional"
+    elif confidence < MIN_CONF:
+        decision_reason = f"low_confidence_{confidence}_lt_{MIN_CONF}"
+    elif stable_count < STABLE_CYCLES:
+        decision_reason = f"unstable_signal_{stable_count}_lt_{STABLE_CYCLES}"
+    else:
+        entry_decision = scalping_signal
+        decision_reason = f"confirmed_{stable_count}_cycles_conf_{confidence}"
+        ds["active_trade"] = scalping_signal
+        ds["lock_until"] = now_sec + ENTRY_LOCK_SEC
+        lock_remaining = ENTRY_LOCK_SEC
 
     # Derive strike + entry/target/stoploss from fast chain when we have a directional trade
     strike_label: Optional[str] = None
@@ -234,6 +451,10 @@ async def compute_for_symbol(symbol: str):
         "price": float(price or 0.0),
         "signal": scalping_signal,
         "confidence": confidence,
+        "entry_decision": entry_decision,
+        "decision_reason": decision_reason,
+        "stable_count": stable_count,
+        "lock_remaining_sec": int(round(lock_remaining)),
         "hero_zero": hero_zero,
         "strike": strike_label,
         "entry": entry,
@@ -254,8 +475,24 @@ async def compute_for_symbol(symbol: str):
     state["signals"][symbol] = {
         "trade": scalping_signal,
         "confidence": confidence,
+        "entry_decision": entry_decision,
+        "decision_reason": decision_reason,
+        "stable_count": stable_count,
+        "lock_remaining_sec": int(round(lock_remaining)),
         "hero_zero": [hero_zero] if hero_zero else [],
         "oi_analysis": _quick_oi(chain_snapshot),
+        "ml": ml_signal,
+        "scalping": {
+            "trade": scalping_signal,
+            "confidence": confidence,
+            "entry_decision": entry_decision,
+            "decision_reason": decision_reason,
+            "stable_count": stable_count,
+            "strike": strike_label,
+            "entry": entry,
+            "target": target,
+            "stoploss": stoploss,
+        },
         "symbol": symbol,
         "price": float(price or 0.0),
     }
@@ -266,6 +503,10 @@ async def compute_for_symbol(symbol: str):
         "price": float(price or 0.0),
         "trade": scalping_signal,
         "confidence": confidence,
+        "entry_decision": entry_decision,
+        "decision_reason": decision_reason,
+        "stable_count": stable_count,
+        "lock_remaining_sec": int(round(lock_remaining)),
         "hero_zero": hero_zero,
         "entry": entry,
         "target": target,
@@ -298,6 +539,22 @@ async def compute_for_symbol(symbol: str):
                 loop.run_in_executor(None, _store_fast_signal_safe, symbol, ts, final_fast)
             else:
                 _store_fast_signal_safe(symbol, ts, final_fast)
+
+    # Always-on local signal recording (all states, including HOLD/NO_TRADE), throttled.
+    record_state = state.setdefault("_signal_record_cooldown", {})
+    last_rec = float(record_state.get(symbol) or 0.0)
+    now_ts = time.time()
+    # Keep file size manageable while still being near real-time.
+    if (now_ts - last_rec) >= 2.0:
+        record_state[symbol] = now_ts
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop is not None:
+            loop.run_in_executor(None, _append_signal_record_safe, symbol, ts, final_fast)
+        else:
+            _append_signal_record_safe(symbol, ts, final_fast)
 
     if scalping_signal != "NO_TRADE":
         logger.info("[FAST SIGNAL] %s price=%s confidence=%s", scalping_signal, price, confidence)
@@ -397,16 +654,29 @@ async def startup_event():
         nifty_spot = float(os.getenv("NIFTY_PROXY_SPOT", "23500"))
         nifty_atm = float(os.getenv("NIFTY_ATM_RANGE", "600"))
         nifty_max = int(os.getenv("NIFTY_MAX_WS_TOKENS", "240"))
-        sensex_spot = float(os.getenv("SENSEX_PROXY_SPOT", "76000"))
-        sensex_atm = float(os.getenv("SENSEX_ATM_RANGE", "1200"))
-        sensex_max = int(os.getenv("SENSEX_MAX_WS_TOKENS", "180"))
+        # Keep SENSEX proxy close to live; far proxy picks illiquid strikes.
+        sensex_spot = float(os.getenv("SENSEX_PROXY_SPOT", "75000"))
+        sensex_atm = float(os.getenv("SENSEX_ATM_RANGE", "800"))
+        sensex_max = int(os.getenv("SENSEX_MAX_WS_TOKENS", "140"))
 
-        n_toks, n_map = get_nifty_option_tokens(inst, nifty_spot, atm_range=nifty_atm, max_tokens=nifty_max)
-        s_toks, s_map = get_sensex_option_tokens(inst, sensex_spot, atm_range=sensex_atm, max_tokens=sensex_max)
+        nifty_exp = int(os.getenv("NIFTY_EXPIRY_COUNT", "2"))
+        sensex_exp = int(os.getenv("SENSEX_EXPIRY_COUNT", "1"))
+        n_toks, n_map = get_nifty_option_tokens(
+            inst, nifty_spot, atm_range=nifty_atm, max_tokens=nifty_max, expiry_count=nifty_exp
+        )
+        s_toks, s_map = get_sensex_option_tokens(
+            inst, sensex_spot, atm_range=sensex_atm, max_tokens=sensex_max, expiry_count=sensex_exp
+        )
         all_map = {**n_map, **s_map}
         all_tokens = list(all_map.keys())
         print("[WS SUBSCRIBE] Option tokens:", len(all_tokens), all_tokens[:10])
-        logger.info("[WS] token split NIFTY=%s SENSEX=%s", len(n_toks), len(s_toks))
+        logger.info(
+            "[WS] token split NIFTY=%s(exp=%s) SENSEX=%s(exp=%s)",
+            len(n_toks),
+            nifty_exp,
+            len(s_toks),
+            sensex_exp,
+        )
         if not all_tokens:
             logger.error("[WS] STOP: 0 option tokens — raise NIFTY/SENSEX proxy spot or ATM ranges")
         if start_angel_ws_manager(None, option_token_map=all_map):
@@ -576,6 +846,67 @@ async def get_option_chain():
             "NIFTY": {"chain": {}, "analytics": {}, "hero_zero_strikes": []},
             "SENSEX": {"chain": {}, "analytics": {}, "hero_zero_strikes": []},
         }
+
+
+@app.get("/ws-health")
+async def get_ws_health():
+    """
+    WebSocket option-chain coverage by symbol.
+    Useful to verify whether ltp/oi/volume/oi_change are flowing.
+    """
+    try:
+        from data.angel_option_stream import get_all_live_option_chains
+        from data.angel_ws_manager import get_ws_price
+
+        chains = get_all_live_option_chains() or {}
+        out: Dict[str, Any] = {}
+
+        def _coverage(chain: Dict[str, Dict[str, Dict[str, Any]]]) -> Dict[str, Any]:
+            total_legs = 0
+            ltp_legs = 0
+            oi_legs = 0
+            vol_legs = 0
+            ch_legs = 0
+            for sides in (chain or {}).values():
+                if not isinstance(sides, dict):
+                    continue
+                for opt in ("CE", "PE"):
+                    leg = sides.get(opt)
+                    if not isinstance(leg, dict):
+                        continue
+                    total_legs += 1
+                    if leg.get("ltp") is not None:
+                        ltp_legs += 1
+                    if leg.get("oi") is not None and float(leg.get("oi") or 0.0) > 0:
+                        oi_legs += 1
+                    if float(leg.get("volume") or 0.0) > 0:
+                        vol_legs += 1
+                    if leg.get("oi_change") is not None or leg.get("change_oi") is not None:
+                        ch_legs += 1
+            den = max(1, total_legs)
+            return {
+                "strikes": len(chain or {}),
+                "legs": total_legs,
+                "ltp_legs": ltp_legs,
+                "oi_legs": oi_legs,
+                "volume_legs": vol_legs,
+                "oi_change_legs": ch_legs,
+                "ltp_pct": round(100.0 * ltp_legs / den, 1),
+                "oi_pct": round(100.0 * oi_legs / den, 1),
+                "volume_pct": round(100.0 * vol_legs / den, 1),
+                "oi_change_pct": round(100.0 * ch_legs / den, 1),
+            }
+
+        for sym in ("NIFTY", "SENSEX"):
+            chain = chains.get(sym) or {}
+            out[sym] = {
+                "index_price": get_ws_price(sym),
+                "coverage": _coverage(chain),
+            }
+        return {"ws_health": out}
+    except Exception as exc:
+        logger.debug("[WS HEALTH] failed: %s", exc)
+        return {"ws_health": {"NIFTY": {}, "SENSEX": {}}, "error": str(exc)}
 
 
 @app.get("/oi")

@@ -61,7 +61,13 @@ def compute_oi_analysis(
     pe_oi = df.loc[df["option_type"] == "PE", "oi"].sum()
     ce_oi = float(ce_oi) if pd.notna(ce_oi) else 0.0
     pe_oi = float(pe_oi) if pd.notna(pe_oi) else 0.0
-    pcr = pe_oi / (ce_oi + 1e-9)
+    if ce_oi <= 0 and pe_oi <= 0:
+        pcr = 0.0
+    elif ce_oi <= 0:
+        pcr = 99.0
+    else:
+        pcr = pe_oi / ce_oi
+    pcr = float(max(0.0, min(99.0, pcr)))
     logger.info("[OI] PCR calculated: %.4f", pcr)
 
     # Max OI strike for CE and PE (strikes with highest call OI and highest put OI)

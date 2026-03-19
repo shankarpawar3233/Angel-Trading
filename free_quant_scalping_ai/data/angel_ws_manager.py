@@ -47,6 +47,7 @@ _last_any_tick = 0.0
 _last_index_tick = 0.0
 _last_index_log = 0.0
 _last_chain_log = 0.0
+_last_sensex_health_log = 0.0
 _reconnect_interval = 3.0
 _stale_index_seconds = 45.0
 
@@ -110,7 +111,8 @@ def _log_subscription_snapshot() -> None:
 
 
 def _on_data(_wsapp: Any, message: Any) -> None:
-    global _last_any_tick, _last_index_tick, _last_index_log, _last_chain_log, option_chain_cache, ws_price_cache
+    global _last_any_tick, _last_index_tick, _last_index_log, _last_chain_log, _last_sensex_health_log
+    global option_chain_cache, ws_price_cache
     global _unmapped_tick_tokens_logged, _unmapped_tick_last_summary, _chain_update_prints
     try:
         if isinstance(message, (bytes, bytearray)):
@@ -250,6 +252,26 @@ def _on_data(_wsapp: Any, message: Any) -> None:
                 print("[CHAIN SIZE]", n)
         except Exception:
             pass
+        # Feed-health debug: SENSEX CE/PE live leg counts every 10s.
+        try:
+            if now - _last_sensex_health_log >= 10.0:
+                with _lock:
+                    sensex_chain = option_chain_cache.get("SENSEX", {})
+                    ce_live = 0
+                    pe_live = 0
+                    for sides in sensex_chain.values():
+                        if not isinstance(sides, dict):
+                            continue
+                        ce = sides.get("CE")
+                        pe = sides.get("PE")
+                        if isinstance(ce, dict) and ce.get("ltp") is not None:
+                            ce_live += 1
+                        if isinstance(pe, dict) and pe.get("ltp") is not None:
+                            pe_live += 1
+                _last_sensex_health_log = now
+                print(f"[SENSEX LIVE LEGS] CE={ce_live} PE={pe_live}")
+        except Exception:
+            pass
     except Exception as exc:
         logger.debug("[WS] tick parse: %s", exc)
 
@@ -312,20 +334,29 @@ def _run_ws_loop() -> None:
             for ex, vals in opt_tokens_by_ex.items()
         }
 
-        # OI enhancement: keep LTP on all tokens, and SNAP_QUOTE on near-ATM subset.
+        # OI enhancement: choose near-ATM subset PER underlying (NIFTY/SENSEX).
         oi_tokens: List[str] = []
-        oi_cap = int(os.getenv("ANGEL_NFO_OI_TOKENS", "80"))
-        if _option_token_map and oi_cap > 0:
+        oi_cap_nifty = int(os.getenv("ANGEL_OI_TOKENS_NIFTY", os.getenv("ANGEL_NFO_OI_TOKENS", "80")))
+        oi_cap_sensex = int(os.getenv("ANGEL_OI_TOKENS_SENSEX", "60"))
+        if _option_token_map:
             try:
-                ref = ws_price_cache.get("NIFTY")
-                if ref is None:
-                    strikes = sorted(float(v.get("strike") or 0.0) for v in _option_token_map.values())
-                    ref = strikes[len(strikes) // 2] if strikes else 0.0
-                ordered = sorted(
-                    ((_norm_token(t), float(m.get("strike") or 0.0)) for t, m in _option_token_map.items()),
-                    key=lambda x: abs(x[1] - float(ref or 0.0)),
-                )
-                oi_tokens = [t for t, _ in ordered[:oi_cap]]
+                by_under: Dict[str, List[tuple]] = {}
+                for t, m in _option_token_map.items():
+                    und = str(m.get("symbol") or "NIFTY").upper()
+                    by_under.setdefault(und, []).append((_norm_token(t), float(m.get("strike") or 0.0)))
+
+                for und, rows in by_under.items():
+                    if not rows:
+                        continue
+                    cap = oi_cap_nifty if und == "NIFTY" else oi_cap_sensex if und == "SENSEX" else 0
+                    if cap <= 0:
+                        continue
+                    ref = ws_price_cache.get(und)
+                    if ref is None:
+                        strikes = sorted(s for _, s in rows)
+                        ref = strikes[len(strikes) // 2] if strikes else 0.0
+                    ordered = sorted(rows, key=lambda x: abs(x[1] - float(ref or 0.0)))
+                    oi_tokens.extend([t for t, _ in ordered[:cap]])
             except Exception:
                 oi_tokens = []
         oi_batches = [oi_tokens[i : i + batch_size] for i in range(0, len(oi_tokens), batch_size)] if oi_tokens else []
@@ -404,10 +435,14 @@ def _run_ws_loop() -> None:
                                 _sws.subscribe(_corrid(), 3, tl)
                             except Exception as exc:
                                 logger.warning("[WS] OI SNAP_QUOTE failed on batch: %s", exc)
+                sensex_oi = len([t for t in oi_tokens if str(_option_token_map.get(t, {}).get("symbol", "")).upper() == "SENSEX"])
+                nifty_oi = len([t for t in oi_tokens if str(_option_token_map.get(t, {}).get("symbol", "")).upper() == "NIFTY"])
                 logger.info(
-                    "[WS] subscribed index + %s LTP NFO batches + %s OI batches",
+                    "[WS] subscribed index + %s LTP option batches + %s OI batches (NIFTY_OI=%s SENSEX_OI=%s)",
                     len(opt_batches),
                     len(oi_batches),
+                    nifty_oi,
+                    sensex_oi,
                 )
 
                 def _failsafe_options() -> None:

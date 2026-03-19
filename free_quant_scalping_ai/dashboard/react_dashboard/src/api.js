@@ -65,3 +65,9 @@ export async function fetchSignalHistory(symbol = 'NIFTY', limit = 50) {
   if (!res.ok) return { symbol: symbol, history: [] };
   return res.json();
 }
+
+export async function fetchWsHealth() {
+  const res = await fetch(`${API_BASE}/ws-health`);
+  if (!res.ok) return { ws_health: {} };
+  return res.json();
+}

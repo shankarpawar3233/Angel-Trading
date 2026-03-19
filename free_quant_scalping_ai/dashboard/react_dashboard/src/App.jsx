@@ -10,7 +10,7 @@ import {
   Legend,
 } from 'chart.js'
 import { Bar } from 'react-chartjs-2'
-import { fetchMarket, fetchSignals, fetchOptionChain, fetchOi, fetchMarketRegime, fetchLiquidityMap, fetchStopHunts, fetchFinalSignal, fetchSignalHistory } from './api'
+import { fetchMarket, fetchSignals, fetchOptionChain, fetchOi, fetchMarketRegime, fetchLiquidityMap, fetchStopHunts, fetchFinalSignal, fetchSignalHistory, fetchWsHealth } from './api'
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, PointElement, Title, Tooltip, Legend)
 
@@ -49,15 +49,20 @@ function MarketStrip({ market }) {
   )
 }
 
-function ScalpingCard({ symbol, scalping, onPlaceOrder }) {
+function ScalpingCard({ symbol, scalping, heroZero, onPlaceOrder }) {
   if (!scalping) return null
-  const isCe = (scalping.trade || '').toUpperCase().includes('CE')
+  const trade = scalping.trade || scalping.signal
+  const isCe = (trade || '').toUpperCase().includes('CE')
+  const entryDecision = scalping.entry_decision || 'HOLD'
+  const decisionReason = scalping.decision_reason || 'n/a'
+  const stableCount = scalping.stable_count != null ? scalping.stable_count : 0
+  const lockRemaining = scalping.lock_remaining_sec != null ? scalping.lock_remaining_sec : 0
   return (
     <div className={`rounded-lg border p-4 ${isCe ? 'border-cyan-500/50 bg-cyan-500/5' : 'border-amber-500/50 bg-amber-500/5'}`}>
       <div className="flex items-center justify-between mb-2">
         <span className="font-mono font-semibold text-slate-200">{symbol}</span>
         <span className={`text-sm font-medium ${isCe ? 'text-cyan-400' : 'text-amber-400'}`}>
-          {scalping.trade || '–'}
+          {trade || '–'}
         </span>
       </div>
       <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm font-mono">
@@ -69,6 +74,20 @@ function ScalpingCard({ symbol, scalping, onPlaceOrder }) {
         <span className="text-emerald-400">{scalping.target != null ? scalping.target : '–'}</span>
         <span className="text-slate-500">SL</span>
         <span className="text-red-400">{scalping.stoploss != null ? scalping.stoploss : '–'}</span>
+      </div>
+      <div className="mt-2 text-xs font-mono grid grid-cols-2 gap-y-1">
+        <span className="text-slate-500">Decision</span>
+        <span className={entryDecision === 'HOLD' ? 'text-amber-300' : 'text-emerald-400'}>{entryDecision}</span>
+        <span className="text-slate-500">Stable count</span>
+        <span className="text-slate-200">{stableCount}</span>
+        <span className="text-slate-500">Reason</span>
+        <span className="text-slate-300 truncate" title={decisionReason}>{decisionReason}</span>
+        {lockRemaining > 0 && (
+          <>
+            <span className="text-slate-500">Lock</span>
+            <span className="text-amber-400">{lockRemaining}s</span>
+          </>
+        )}
       </div>
       <div className="mt-2 flex items-center justify-between">
         <span className="text-xs text-slate-400">
@@ -84,6 +103,10 @@ function ScalpingCard({ symbol, scalping, onPlaceOrder }) {
           </button>
         )}
       </div>
+      <div className="mt-3 pt-3 border-t border-slate-700/50">
+        <div className="text-[11px] uppercase tracking-wide text-slate-500 mb-1">Hero-zero</div>
+        <HeroZeroList heroZero={heroZero} />
+      </div>
     </div>
   )
 }
@@ -94,7 +117,15 @@ function HeroZeroList({ heroZero }) {
     <ul className="space-y-2">
       {heroZero.map((h, i) => (
         <li key={i} className="font-mono text-sm text-slate-300">
-          {typeof h.strike === 'number' ? `${h.strike} ${h.type || ''}` : h.strike} — Entry: {h.entry} | Target: {h.target} | Prob: {h.probability != null ? Math.round(h.probability) : '–'}%
+          <span>{typeof h.strike === 'number' ? `${h.strike} ${h.type || ''}` : h.strike}</span>
+          <span className="text-slate-500"> — Entry: </span>
+          <span className="text-slate-200">{h.entry ?? '–'}</span>
+          <span className="text-slate-500"> | Target: </span>
+          <span className="text-emerald-400">{h.target ?? '–'}</span>
+          <span className="text-slate-500"> | SL: </span>
+          <span className="text-red-400">{h.stoploss ?? '–'}</span>
+          <span className="text-slate-500"> | Prob: </span>
+          <span className="text-slate-300">{h.probability != null ? Math.round(h.probability) : '–'}%</span>
         </li>
       ))}
     </ul>
@@ -358,10 +389,14 @@ function FinalSignalCard({ finalSignal }) {
           </div>
           <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
             <span className="text-slate-500">Trade</span><span className={s?.trade === 'BUY_CE' ? 'text-cyan-400' : s?.trade === 'BUY_PE' ? 'text-amber-400' : 'text-slate-400'}>{s?.trade ?? '–'}</span>
+            <span className="text-slate-500">Decision</span><span className={s?.entry_decision === 'HOLD' ? 'text-amber-300' : 'text-emerald-400'}>{s?.entry_decision ?? '–'}</span>
+            <span className="text-slate-500">Reason</span><span className="text-slate-200" title={s?.decision_reason}>{s?.decision_reason ?? '–'}</span>
+            <span className="text-slate-500">Stable</span><span className="text-slate-200">{s?.stable_count ?? '–'}</span>
             <span className="text-slate-500">Strike</span><span className="text-slate-200">{s?.strike ?? '–'}</span>
             <span className="text-slate-500">Buy / Entry</span><span className="text-white font-medium">{s?.entry != null ? Number(s.entry).toFixed(2) : '–'}</span>
             <span className="text-slate-500">Target</span><span className="text-emerald-400">{s?.target != null ? Number(s.target).toFixed(2) : '–'}</span>
             <span className="text-slate-500">Stoploss</span><span className="text-red-400">{s?.stoploss != null ? Number(s.stoploss).toFixed(2) : '–'}</span>
+            <span className="text-slate-500">Lock</span><span className="text-amber-400">{s?.lock_remaining_sec != null ? `${s.lock_remaining_sec}s` : '–'}</span>
             <span className="text-slate-500">Confidence</span><span className="text-slate-200">{s?.confidence != null ? `${s.confidence}%` : '–'}</span>
             <span className="text-slate-500">Regime</span><span className="text-slate-200">{s?.regime ?? '–'}</span>
             <span className="text-slate-500">Gamma wall</span><span className="text-slate-200">{s?.gamma_wall ?? '–'}</span>
@@ -467,6 +502,8 @@ export default function App() {
   const [stopHunts, setStopHunts] = useState({})
   const [finalSignal, setFinalSignal] = useState({})
   const [signalHistory, setSignalHistory] = useState({ symbol: 'NIFTY', history: [] })
+  const [wsHealth, setWsHealth] = useState({})
+  const symbolOrder = ['NIFTY', 'SENSEX']
 
   const placeOrder = (symbol, scalping) => {
     const o = {
@@ -488,26 +525,28 @@ export default function App() {
 
   const load = async () => {
     try {
-      const [marketRes, signalsRes, chainRes, oiRes, regimeRes, liqRes, stopRes, finalRes, historyRes] = await Promise.all([
+      const [marketRes, signalsRes, chainRes, oiRes, regimeRes, liqRes, stopRes, finalRes, historyRes, wsHealthRes] = await Promise.all([
         fetchMarket(),
         fetchSignals(),
-        fetchOptionChain().catch(() => ({ NIFTY: {} })),
+        fetchOptionChain().catch(() => ({ NIFTY: {}, SENSEX: {} })),
         fetchOi().catch(() => ({})),
         fetchMarketRegime().catch(() => ({ market_regime: {} })),
         fetchLiquidityMap().catch(() => ({ liquidity_map: {} })),
         fetchStopHunts().catch(() => ({ stop_hunts: {} })),
         fetchFinalSignal().catch(() => ({ final_signal: {} })),
         fetchSignalHistory('NIFTY', 50).catch(() => ({ symbol: 'NIFTY', history: [] })),
+        fetchWsHealth().catch(() => ({ ws_health: {} })),
       ])
       setMarket(marketRes.market || {})
       setSignals(signalsRes.signals || {})
-      setOptionChain(chainRes?.NIFTY ? { NIFTY: chainRes.NIFTY } : chainRes || {})
+      setOptionChain(chainRes || {})
       setOi(oiRes || {})
       setMarketRegime(regimeRes.market_regime || {})
       setLiquidityMap(liqRes.liquidity_map || {})
       setStopHunts(stopRes.stop_hunts || {})
       setFinalSignal(finalRes.final_signal || {})
       setSignalHistory(historyRes?.history ? { symbol: historyRes.symbol || 'NIFTY', history: historyRes.history } : { symbol: 'NIFTY', history: [] })
+      setWsHealth(wsHealthRes?.ws_health || {})
       setModelVersion(signalsRes.model_version || marketRes.model_version || null)
       setLastUpdate(new Date())
       setError(null)
@@ -558,12 +597,18 @@ export default function App() {
         <section className="mb-8">
           <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Scalping signals</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {Object.entries(signals).map(([symbol, s]) => (
-              <ScalpingCard key={symbol} symbol={symbol} scalping={s?.scalping} onPlaceOrder={placeOrder} />
-            ))}
-            {Object.keys(signals).length === 0 && !error && (
-              <div className="text-slate-500 col-span-2">Waiting for signals…</div>
-            )}
+            {symbolOrder.map((symbol) => {
+              const s = signals?.[symbol] || {}
+              return (
+                <ScalpingCard
+                  key={symbol}
+                  symbol={symbol}
+                  scalping={s?.scalping || s || { trade: 'NO_TRADE', entry_decision: 'HOLD', decision_reason: 'waiting_live_data' }}
+                  heroZero={s?.hero_zero || []}
+                  onPlaceOrder={placeOrder}
+                />
+              )
+            })}
           </div>
         </section>
 
@@ -614,8 +659,37 @@ export default function App() {
 
         <section className="mb-8">
           <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Option chain heatmap (Angel live)</h2>
-          <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-4">
-            <OptionChainHeatmap optionChainData={optionChain?.NIFTY || optionChain} />
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-4">
+              <div className="text-slate-500 text-xs mb-2">NIFTY</div>
+              <OptionChainHeatmap optionChainData={optionChain?.NIFTY || {}} />
+            </div>
+            <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-4">
+              <div className="text-slate-500 text-xs mb-2">SENSEX</div>
+              <OptionChainHeatmap optionChainData={optionChain?.SENSEX || {}} />
+            </div>
+          </div>
+        </section>
+
+        <section className="mb-8">
+          <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">WS health (ltp / oi / volume coverage)</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {['NIFTY', 'SENSEX'].map((sym) => {
+              const h = wsHealth?.[sym]?.coverage || {}
+              return (
+                <div key={sym} className="rounded-lg border border-slate-700 bg-slate-900/50 p-4 font-mono text-xs">
+                  <div className="text-slate-400 mb-2">{sym} @ {wsHealth?.[sym]?.index_price != null ? Number(wsHealth[sym].index_price).toFixed(2) : '–'}</div>
+                  <div className="grid grid-cols-2 gap-y-1">
+                    <span className="text-slate-500">Strikes</span><span className="text-slate-200">{h.strikes ?? 0}</span>
+                    <span className="text-slate-500">Legs</span><span className="text-slate-200">{h.legs ?? 0}</span>
+                    <span className="text-slate-500">LTP</span><span className="text-emerald-400">{h.ltp_pct ?? 0}%</span>
+                    <span className="text-slate-500">OI</span><span className="text-cyan-400">{h.oi_pct ?? 0}%</span>
+                    <span className="text-slate-500">Volume</span><span className="text-amber-400">{h.volume_pct ?? 0}%</span>
+                    <span className="text-slate-500">OI change</span><span className="text-violet-400">{h.oi_change_pct ?? 0}%</span>
+                  </div>
+                </div>
+              )
+            })}
           </div>
         </section>
 
@@ -697,15 +771,6 @@ export default function App() {
                 {s?.institutional_flow?.put_call_ratio != null && (
                   <span className="text-slate-500 ml-1">PCR: {Number(s.institutional_flow.put_call_ratio).toFixed(2)}</span>
                 )}
-              </div>
-            ))}
-          </div>
-          <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-4">
-            <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Hero-Zero opportunities</h2>
-            {Object.entries(signals).map(([symbol, s]) => (
-              <div key={symbol}>
-                <span className="text-slate-500 text-xs">{symbol}: </span>
-                <HeroZeroList heroZero={s?.hero_zero} />
               </div>
             ))}
           </div>

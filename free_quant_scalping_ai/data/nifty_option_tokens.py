@@ -8,6 +8,7 @@ Supports:
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from data.angel_instruments import load_instruments
@@ -44,11 +45,13 @@ def _get_index_option_tokens(
     spot_price: float,
     atm_range: float,
     max_tokens: int,
+    expiry_count: int = 2,
 ) -> Tuple[List[str], Dict[str, Dict[str, Any]]]:
     spot = float(spot_price)
     name_u = index_name.upper()
     token_map: Dict[str, Dict[str, Any]] = {}
 
+    filtered: List[Dict[str, Any]] = []
     for inst in instruments:
         exch = str(inst.get("exch_seg") or "").upper()
         if exch != exch_seg:
@@ -61,6 +64,25 @@ def _get_index_option_tokens(
             continue
         if name_u not in nm and not sym.startswith(name_u):
             continue
+        filtered.append(inst)
+
+    # Prefer nearest expiries to keep subscriptions liquid and moving.
+    expiries_raw = [str(x.get("expiry") or "").strip().upper() for x in filtered if str(x.get("expiry") or "").strip()]
+    expiry_dates: List[Tuple[datetime, str]] = []
+    for e in set(expiries_raw):
+        try:
+            expiry_dates.append((datetime.strptime(e, "%d%b%Y"), e))
+        except ValueError:
+            continue
+    expiry_dates.sort(key=lambda x: x[0])
+    exp_n = max(1, int(expiry_count))
+    selected_expiries = {x[1] for x in expiry_dates[:exp_n]} if expiry_dates else set()
+
+    for inst in filtered:
+        exp = str(inst.get("expiry") or "").strip().upper()
+        if selected_expiries and exp and exp not in selected_expiries:
+            continue
+        sym = str(inst.get("symbol") or "").upper()
         strike = _strike_from_row(inst)
         if strike is None or abs(strike - spot) > float(atm_range):
             continue
@@ -74,10 +96,47 @@ def _get_index_option_tokens(
             "exchangeType": int(exchange_type),
         }
 
-    items = sorted(token_map.items(), key=lambda kv: (abs(float(kv[1]["strike"]) - spot), kv[0]))[: int(max_tokens)]
-    token_map = dict(items)
+    # Balanced selection: prefer nearest strikes with both CE/PE coverage.
+    strike_groups: Dict[float, Dict[str, List[Tuple[str, Dict[str, Any]]]]] = {}
+    for tok, meta in token_map.items():
+        s = float(meta["strike"])
+        t = str(meta.get("type") or "")
+        strike_groups.setdefault(s, {"CE": [], "PE": []})
+        if t in ("CE", "PE"):
+            strike_groups[s][t].append((tok, meta))
+    ordered_strikes = sorted(strike_groups.keys(), key=lambda s: abs(s - spot))
+    balanced_items: List[Tuple[str, Dict[str, Any]]] = []
+    for s in ordered_strikes:
+        ce_list = sorted(strike_groups[s]["CE"], key=lambda x: x[0])
+        pe_list = sorted(strike_groups[s]["PE"], key=lambda x: x[0])
+        if ce_list:
+            balanced_items.append(ce_list[0])
+        if pe_list:
+            balanced_items.append(pe_list[0])
+        if len(balanced_items) >= int(max_tokens):
+            break
+    if len(balanced_items) < int(max_tokens):
+        used = {t for t, _ in balanced_items}
+        extras = sorted(
+            [(t, m) for t, m in token_map.items() if t not in used],
+            key=lambda kv: (abs(float(kv[1]["strike"]) - spot), kv[0]),
+        )
+        need = int(max_tokens) - len(balanced_items)
+        balanced_items.extend(extras[:need])
+    token_map = dict(balanced_items[: int(max_tokens)])
     tokens = list(token_map.keys())
-    logger.info("[%s TOKENS] count=%s spot=%s atm±%s", name_u, len(tokens), spot, atm_range)
+    ce_count = sum(1 for _t, m in token_map.items() if str(m.get("type") or "") == "CE")
+    pe_count = sum(1 for _t, m in token_map.items() if str(m.get("type") or "") == "PE")
+    logger.info(
+        "[%s TOKENS] count=%s CE=%s PE=%s spot=%s atm±%s expiries=%s",
+        name_u,
+        len(tokens),
+        ce_count,
+        pe_count,
+        spot,
+        atm_range,
+        sorted(selected_expiries) if selected_expiries else ["ALL"],
+    )
     return tokens, token_map
 
 
@@ -86,6 +145,7 @@ def get_nifty_option_tokens(
     spot_price: float,
     atm_range: float = 600.0,
     max_tokens: int = 240,
+    expiry_count: int = 2,
 ) -> Tuple[List[str], Dict[str, Dict[str, Any]]]:
     out = _get_index_option_tokens(
         instruments,
@@ -95,6 +155,7 @@ def get_nifty_option_tokens(
         spot_price=spot_price,
         atm_range=atm_range,
         max_tokens=max_tokens,
+        expiry_count=expiry_count,
     )
     print("[NFO TOKENS]", len(out[0]))
     return out
@@ -105,6 +166,7 @@ def get_sensex_option_tokens(
     spot_price: float,
     atm_range: float = 1200.0,
     max_tokens: int = 200,
+    expiry_count: int = 1,
 ) -> Tuple[List[str], Dict[str, Dict[str, Any]]]:
     out = _get_index_option_tokens(
         instruments,
@@ -114,6 +176,7 @@ def get_sensex_option_tokens(
         spot_price=spot_price,
         atm_range=atm_range,
         max_tokens=max_tokens,
+        expiry_count=expiry_count,
     )
     print("[BFO TOKENS]", len(out[0]))
     return out

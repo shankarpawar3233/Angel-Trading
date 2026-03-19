@@ -55,6 +55,49 @@ def generate_fast_scalping_signal(features: Dict[str, Any]) -> str:
     return "NO_TRADE"
 
 
+def generate_ml_signal(features: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Ultra-light ML-style scorer (constant-time): combines OI, volume and momentum
+    into CE/PE directional probabilities. No blocking or model I/O.
+    """
+    call_oi = float(features.get("call_oi_strength") or 0.0)
+    put_oi = float(features.get("put_oi_strength") or 0.0)
+    call_vol = float(features.get("call_volume_strength") or 0.0)
+    put_vol = float(features.get("put_volume_strength") or 0.0)
+    mom = float(features.get("price_momentum") or 0.0)
+
+    # Linear logits (cheap) then sigmoid.
+    z_ce = 1.8 * (call_oi - put_oi) + 1.3 * (call_vol - put_vol) + 4.5 * mom
+    z_pe = -z_ce
+
+    def _sigmoid(x: float) -> float:
+        # stable enough in this bounded range
+        import math
+
+        return 1.0 / (1.0 + math.exp(-max(-12.0, min(12.0, x))))
+
+    p_ce = _sigmoid(z_ce)
+    p_pe = _sigmoid(z_pe)
+    if p_ce >= p_pe:
+        label = "BUY_CE"
+        p = p_ce
+    else:
+        label = "BUY_PE"
+        p = p_pe
+
+    confidence = int(round(p * 100))
+    # Require a floor so ML fallback does not overtrade noise.
+    if confidence < 58:
+        label = "NO_TRADE"
+
+    return {
+        "label": label,
+        "confidence": confidence,
+        "prob_ce": round(p_ce, 4),
+        "prob_pe": round(p_pe, 4),
+    }
+
+
 def compute_fast_confidence(features: Dict[str, Any]) -> int:
     """
     Lightweight confidence model:
