@@ -10,7 +10,7 @@ import {
   Legend,
 } from 'chart.js'
 import { Bar } from 'react-chartjs-2'
-import { fetchMarket, fetchSignals, fetchOptionChain, fetchOi, fetchMarketRegime, fetchLiquidityMap, fetchStopHunts, fetchFinalSignal, fetchSignalHistory, fetchWsHealth } from './api'
+import { fetchMarket, fetchSignals, fetchOptionChain, fetchOi, fetchMarketRegime, fetchLiquidityMap, fetchStopHunts, fetchFinalSignal, fetchWsHealth } from './api'
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, PointElement, Title, Tooltip, Legend)
 
@@ -58,7 +58,7 @@ function ScalpingCard({ symbol, scalping, heroZero, onPlaceOrder }) {
   const stableCount = scalping.stable_count != null ? scalping.stable_count : 0
   const lockRemaining = scalping.lock_remaining_sec != null ? scalping.lock_remaining_sec : 0
   return (
-    <div className={`rounded-lg border p-4 ${isCe ? 'border-cyan-500/50 bg-cyan-500/5' : 'border-amber-500/50 bg-amber-500/5'}`}>
+    <div className={`rounded-lg border p-3 ${isCe ? 'border-cyan-500/50 bg-cyan-500/5' : 'border-amber-500/50 bg-amber-500/5'}`}>
       <div className="flex items-center justify-between mb-2">
         <span className="font-mono font-semibold text-slate-200">{symbol}</span>
         <span className={`text-sm font-medium ${isCe ? 'text-cyan-400' : 'text-amber-400'}`}>
@@ -380,7 +380,7 @@ function FinalSignalCard({ finalSignal }) {
   if (!finalSignal || !Object.keys(finalSignal).length) return <div className="text-slate-500 text-sm">No final signal</div>
   const entries = Object.entries(finalSignal)
   return (
-    <div className="space-y-2">
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
       {entries.map(([symbol, s]) => (
         <div key={symbol} className="rounded border border-slate-700 bg-slate-800/40 p-3 font-mono text-sm">
           <div className="flex items-center justify-between mb-2">
@@ -405,54 +405,6 @@ function FinalSignalCard({ finalSignal }) {
           </div>
         </div>
       ))}
-    </div>
-  )
-}
-
-function SignalHistoryPanel({ history, symbol }) {
-  const list = history || []
-  if (!list.length) return <div className="text-slate-500 text-sm">No signal history yet. Signals are stored each time the system runs (every ~60s).</div>
-  const fmtTime = (ts) => {
-    if (!ts) return '–'
-    try {
-      const d = new Date(ts)
-      return isNaN(d.getTime()) ? ts : d.toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'medium' })
-    } catch (_) { return ts }
-  }
-  const tradeColor = (trade) => trade === 'BUY_CE' ? 'text-cyan-400' : trade === 'BUY_PE' ? 'text-amber-400' : 'text-slate-400'
-  return (
-    <div className="space-y-2">
-      <div className="text-xs text-slate-500 font-mono mb-2">Symbol: {symbol} · Newest first</div>
-      <div className="overflow-auto max-h-80 border border-slate-700 rounded-lg">
-        <table className="w-full text-xs font-mono border-collapse">
-          <thead className="bg-slate-800/80 sticky top-0">
-            <tr>
-              <th className="text-left p-2 text-slate-400 font-semibold">Time</th>
-              <th className="text-left p-2 text-slate-400">Price</th>
-              <th className="text-left p-2 text-slate-400">Trade</th>
-              <th className="text-left p-2 text-slate-400">Entry</th>
-              <th className="text-left p-2 text-slate-400">Target</th>
-              <th className="text-left p-2 text-slate-400">SL</th>
-              <th className="text-left p-2 text-slate-400">Conf.</th>
-              <th className="text-left p-2 text-slate-400">Regime</th>
-            </tr>
-          </thead>
-          <tbody>
-            {list.map((row, i) => (
-              <tr key={i} className="border-t border-slate-700/50 hover:bg-slate-800/40">
-                <td className="p-2 text-slate-400">{fmtTime(row.ts)}</td>
-                <td className="p-2 text-slate-200">{row.price != null ? Number(row.price).toLocaleString(undefined, { maximumFractionDigits: 2 }) : '–'}</td>
-                <td className={`p-2 ${tradeColor(row.trade)}`}>{row.trade ?? '–'}</td>
-                <td className="p-2 text-white">{row.entry != null ? Number(row.entry).toFixed(2) : '–'}</td>
-                <td className="p-2 text-emerald-400">{row.target != null ? Number(row.target).toFixed(2) : '–'}</td>
-                <td className="p-2 text-red-400">{row.stoploss != null ? Number(row.stoploss).toFixed(2) : '–'}</td>
-                <td className="p-2 text-slate-200">{row.confidence != null ? `${row.confidence}%` : '–'}</td>
-                <td className="p-2 text-slate-300">{row.regime ?? '–'}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
     </div>
   )
 }
@@ -488,6 +440,220 @@ function PlacedOrders({ orders, onExit }) {
   )
 }
 
+function getWsDecisionGuide(coverage = {}) {
+  const ltp = Number(coverage.ltp_pct ?? 0)
+  const oi = Number(coverage.oi_pct ?? 0)
+  const volume = Number(coverage.volume_pct ?? 0)
+  const oiChange = Number(coverage.oi_change_pct ?? 0)
+
+  const livePriceReliable = ltp >= 90
+  const structureReliable = oi >= 80
+  const flowWeak = volume < 40
+  const changeUseful = oiChange >= 70
+
+  let quality = 'LOW'
+  if (livePriceReliable && structureReliable) quality = 'HIGH'
+  else if (ltp >= 70 && oi >= 60) quality = 'MEDIUM'
+
+  let impact = 'Analytics trust is limited; avoid aggressive trades.'
+  let decision = 'Use small size or wait for better feed quality.'
+
+  if (quality === 'HIGH' && flowWeak && changeUseful) {
+    impact = 'Price/OI signals are reliable, but low volume can cause fake moves and slippage.'
+    decision = 'Take only high-confidence setups, use tighter risk, and prefer pullback entries.'
+  } else if (quality === 'HIGH' && volume >= 40) {
+    impact = 'Strong data quality across price, OI and volume supports conviction.'
+    decision = 'Normal position sizing is acceptable with standard risk rules.'
+  } else if (quality === 'MEDIUM') {
+    impact = 'Moderate reliability; some indicators may lag or miss strike-level shifts.'
+    decision = 'Reduce size and demand multi-signal confirmation before entry.'
+  }
+
+  return { quality, impact, decision }
+}
+
+function getOiDecisionGuide(oi = {}) {
+  const pcr = oi?.pcr != null ? Number(oi.pcr) : null
+  const maxCall = oi?.max_oi_call != null ? Number(oi.max_oi_call) : null
+  const maxPut = oi?.max_oi_put != null ? Number(oi.max_oi_put) : null
+
+  let bias = 'NEUTRAL'
+  if (pcr != null) {
+    if (pcr < 0.8) bias = 'BEARISH'
+    else if (pcr > 1.2) bias = 'BULLISH'
+  }
+
+  let structure = 'No clear OI wall structure.'
+  if (maxCall != null && maxPut != null) {
+    if (maxCall > maxPut) {
+      structure = `Put wall ${maxPut} below and call wall ${maxCall} above suggest a tradable range.`
+    } else if (maxPut > maxCall) {
+      structure = `OI is stacked unusually (put wall above call wall); expect unstable/transition regime.`
+    } else {
+      structure = `Both OI walls near ${maxCall}; expect pinning around this zone.`
+    }
+  }
+
+  let decision = 'Wait for price-action confirmation before directional entries.'
+  if (bias === 'BEARISH') {
+    decision = 'Prefer PE setups near resistance/call-wall rejection; avoid aggressive CE chasing.'
+  } else if (bias === 'BULLISH') {
+    decision = 'Prefer CE setups near support/put-wall holds; avoid fresh PE shorts near support.'
+  } else if (maxCall != null && maxPut != null) {
+    decision = `Range behavior likely between ${Math.min(maxPut, maxCall)}-${Math.max(maxPut, maxCall)}; scalp edges, book faster.`
+  }
+
+  return { bias, structure, decision }
+}
+
+function getMlRlDecisionGuide(signal = {}) {
+  const mlRaw = String(signal?.ml?.label ?? '').toUpperCase()
+  const rlRaw = String(signal?.rl?.action ?? '').toUpperCase()
+  const ml = mlRaw || 'NO_TRADE'
+  const rl = rlRaw || 'NONE'
+
+  let impact = 'Model guidance is weak; rely more on price structure and risk rules.'
+  let decision = 'Avoid blind execution. Wait for multi-signal confirmation.'
+
+  if (ml === 'BUY_PE' && (rl === 'NONE' || rl === 'HOLD' || rl === '-')) {
+    impact = 'Directional bearish hint from ML, but RL gives no execution support.'
+    decision = 'Treat as watchlist short setup: execute only after regime/OI/price-action confirms.'
+  } else if (ml === 'BUY_CE' && (rl === 'NONE' || rl === 'HOLD' || rl === '-')) {
+    impact = 'Directional bullish hint from ML, but RL does not confirm timing.'
+    decision = 'Prefer pullback CE entries with strict SL; avoid momentum chase without confirmation.'
+  } else if (ml === 'NO_TRADE') {
+    impact = 'Model expects low edge in current conditions.'
+    decision = 'Stay selective; preserve capital and wait for clearer setup.'
+  } else if ((ml === 'BUY_PE' && rl.includes('SELL')) || (ml === 'BUY_CE' && rl.includes('BUY'))) {
+    impact = 'ML and RL alignment improves conviction and timing quality.'
+    decision = 'Normal sizing is acceptable if WS health and risk filters are healthy.'
+  }
+
+  return { ml, rl: rl === 'NONE' ? '-' : rl, impact, decision }
+}
+
+function DashboardGuideTable() {
+  const guideRows = [
+    {
+      feature: 'Scalping signals',
+      meaning: 'Primary CE/PE trade call with entry, target, SL, confidence and execution gate.',
+      usefulness: 'Fast directional decision support and trade planning.',
+      impact: 'High direct impact on entries, exits, and risk control.',
+      example: 'Example: BUY_CE @ 118, Target 152, SL 96, Confidence 82% -> look for CE momentum entry.',
+    },
+    {
+      feature: 'Placed orders (paper)',
+      meaning: 'Local paper-trade list of orders triggered from the dashboard.',
+      usefulness: 'Tracks active ideas and manual monitoring workflow.',
+      impact: 'Operational impact on discipline and execution tracking.',
+      example: 'Example: If 3 paper trades open together, reduce new entries to avoid overexposure.',
+    },
+    {
+      feature: 'Final signal (quant analytics)',
+      meaning: 'Consolidated signal combining multiple analytics into one decision snapshot.',
+      usefulness: 'Quick confirmation layer before taking a trade.',
+      impact: 'Reduces conflicting decisions and improves consistency.',
+      example: 'Example: Final signal = BUY_PE + HOLD removed + stable_count rising -> stronger execution confidence.',
+    },
+    {
+      feature: 'Market regime indicator',
+      meaning: 'Market state (trend/range/volatile) with confidence.',
+      usefulness: 'Helps choose strategy style and aggressiveness.',
+      impact: 'Affects win rate by aligning trades with regime.',
+      example: 'Example: TREND_DOWN (78%) -> prefer PE pullback entries over CE mean-reversion trades.',
+    },
+    {
+      feature: 'Option chain heatmap',
+      meaning: 'Live CE/PE LTP, OI, volume by strike with key concentrations.',
+      usefulness: 'Identifies strike-level positioning and pressure zones.',
+      impact: 'Improves strike selection and support/resistance context.',
+      example: 'Example: Max PE OI at 23200 and price above it -> 23200 can act as support zone.',
+    },
+    {
+      feature: 'WS health',
+      meaning: 'Data coverage quality for LTP/OI/volume stream.',
+      usefulness: 'Validates if analytics are based on sufficient live data.',
+      impact: 'Poor health lowers trust; good health increases confidence.',
+      example: 'Example: LTP 95%, OI 92% = reliable; LTP 35% = avoid aggressive entries.',
+    },
+    {
+      feature: 'OI analysis',
+      meaning: 'PCR, max OI strikes, and OI spike summaries.',
+      usefulness: 'Shows positioning bias and likely defended levels.',
+      impact: 'Guides directional bias and stop placement.',
+      example: 'Example: PCR 1.35 with rising PE OI -> bullish bias unless price breaks support.',
+    },
+    {
+      feature: 'Liquidity map',
+      meaning: 'Detected liquidity pockets, support/resistance zones, stop clusters.',
+      usefulness: 'Highlights likely reaction areas and trap zones.',
+      impact: 'Improves entry timing and avoids poor-chase entries.',
+      example: 'Example: Resistance cluster near 23300 -> avoid fresh CE longs right below 23300.',
+    },
+    {
+      feature: 'Stop-hunt detection',
+      meaning: 'Potential stop sweep and reversal detection.',
+      usefulness: 'Warns against entering into fake breakouts.',
+      impact: 'Can reduce whipsaw losses and improve timing.',
+      example: 'Example: Resistance stop-hunt detected -> wait for confirmation candle before PE short-cover.',
+    },
+    {
+      feature: 'Gamma exposure / Max pain / Expiry bias',
+      meaning: 'Dealer positioning and expiry-related magnet levels.',
+      usefulness: 'Context for intraday pinning, expansion, and volatility behavior.',
+      impact: 'Helps set realistic targets and trade duration.',
+      example: 'Example: Spot near max pain into expiry -> expect chop/pinning, use smaller targets.',
+    },
+    {
+      feature: 'Institutional flow',
+      meaning: 'Derived flow sentiment and put-call positioning clues.',
+      usefulness: 'Adds macro bias confirmation to intraday setup.',
+      impact: 'Improves conviction when aligned with other signals.',
+      example: 'Example: Bearish flow + bearish regime + PE signal alignment -> higher-probability short setup.',
+    },
+    {
+      feature: 'ML / RL',
+      meaning: 'Model-recommended label/action from ML and RL layers.',
+      usefulness: 'Secondary decision intelligence signal.',
+      impact: 'Useful as confirmation, not standalone execution trigger.',
+      example: 'Example: ML=BUY_CE, RL=HOLD -> delay entry until price action confirms direction.',
+    },
+  ]
+
+  return (
+    <section className="mb-6 rounded-lg border border-slate-700 bg-slate-900/50 p-3">
+      <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-2">Dashboard guide</h2>
+      <p className="text-xs text-slate-500 mb-3">
+        What each block means, why it is useful, and how it impacts trading decisions.
+      </p>
+      <div className="overflow-auto max-h-80 border border-slate-700 rounded-lg">
+        <table className="w-full text-xs border-collapse">
+          <thead className="bg-slate-800/80 sticky top-0">
+            <tr>
+              <th className="text-left p-2 text-slate-400 font-semibold">Section</th>
+              <th className="text-left p-2 text-slate-400 font-semibold">Meaning</th>
+              <th className="text-left p-2 text-slate-400 font-semibold">Usefulness</th>
+              <th className="text-left p-2 text-slate-400 font-semibold">Impact</th>
+              <th className="text-left p-2 text-slate-400 font-semibold">Example</th>
+            </tr>
+          </thead>
+          <tbody>
+            {guideRows.map((row) => (
+              <tr key={row.feature} className="border-t border-slate-700/50 align-top">
+                <td className="p-2 text-slate-200 font-medium">{row.feature}</td>
+                <td className="p-2 text-slate-300">{row.meaning}</td>
+                <td className="p-2 text-slate-300">{row.usefulness}</td>
+                <td className="p-2 text-slate-300">{row.impact}</td>
+                <td className="p-2 text-slate-300">{row.example}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  )
+}
+
 export default function App() {
   const [market, setMarket] = useState({})
   const [signals, setSignals] = useState({})
@@ -501,9 +667,68 @@ export default function App() {
   const [liquidityMap, setLiquidityMap] = useState({})
   const [stopHunts, setStopHunts] = useState({})
   const [finalSignal, setFinalSignal] = useState({})
-  const [signalHistory, setSignalHistory] = useState({ symbol: 'NIFTY', history: [] })
   const [wsHealth, setWsHealth] = useState({})
   const symbolOrder = ['NIFTY', 'SENSEX']
+  const signalEntries = Object.entries(signals || {})
+  const hasFinalSignal = Object.keys(finalSignal || {}).length > 0
+  const hasMarketRegimeSection =
+    Object.keys(marketRegime || {}).length > 0 ||
+    signalEntries.some(([, s]) => s?.regime?.regime)
+  const hasOptionChainSection =
+    ((optionChain?.NIFTY?.chain && Object.keys(optionChain.NIFTY.chain).length > 0) ||
+      (optionChain?.SENSEX?.chain && Object.keys(optionChain.SENSEX.chain).length > 0))
+  const hasWsHealthSection = ['NIFTY', 'SENSEX'].some((sym) => {
+    const h = wsHealth?.[sym]?.coverage || {}
+    return (h.strikes ?? 0) > 0 || (h.legs ?? 0) > 0
+  })
+  const liquidityEntries =
+    Object.entries(liquidityMap || {}).length > 0
+      ? Object.entries(liquidityMap || {}).filter(([, lm]) =>
+          (lm?.heatmap?.length ?? 0) > 0 ||
+          (lm?.support_zones?.length ?? 0) > 0 ||
+          (lm?.resistance_zones?.length ?? 0) > 0
+        )
+      : signalEntries
+          .map(([symbol, s]) => [symbol, s?.liquidity_map])
+          .filter(([, lm]) =>
+            (lm?.heatmap?.length ?? 0) > 0 ||
+            (lm?.support_zones?.length ?? 0) > 0 ||
+            (lm?.resistance_zones?.length ?? 0) > 0
+          )
+  const stopHuntEntries =
+    Object.entries(stopHunts || {}).length > 0
+      ? Object.entries(stopHunts || {}).filter(([, sh]) => Boolean(sh?.detected))
+      : signalEntries
+          .map(([symbol, s]) => [symbol, s?.stop_hunt])
+          .filter(([, sh]) => Boolean(sh?.detected))
+  const gexEntries = signalEntries.filter(([, s]) => (s?.gamma_levels?.gamma_levels?.length ?? 0) > 0)
+  const maxPainEntries = signalEntries.filter(([, s]) => s?.max_pain != null)
+  const expiryEntries = signalEntries.filter(
+    ([, s]) => Boolean(s?.expiry_bias) || (s?.expiry_bias_range?.length ?? 0) >= 2
+  )
+  const institutionalFlowEntries = signalEntries.filter(
+    ([, s]) => Boolean(s?.institutional_flow?.description) || s?.institutional_flow?.put_call_ratio != null
+  )
+  const oiEntries =
+    Object.keys(oi || {}).length > 0
+      ? Object.entries(oi || {}).filter(
+          ([, data]) =>
+            data?.pcr != null || data?.max_oi_call != null || data?.max_oi_put != null || (data?.oi_spikes?.length ?? 0) > 0
+        )
+      : signalEntries
+          .map(([symbol, s]) => [symbol, s?.oi_analysis])
+          .filter(
+            ([, data]) =>
+              data?.pcr != null || data?.max_oi_call != null || data?.max_oi_put != null || (data?.oi_spikes?.length ?? 0) > 0
+          )
+  const gammaExpiryEntries = signalEntries.filter(
+    ([, s]) =>
+      (s?.gamma?.gamma_walls?.length ?? 0) > 0 ||
+      s?.gamma?.gamma_flip != null ||
+      Boolean(s?.expiry) ||
+      Boolean(s?.liquidity_sweep?.detected)
+  )
+  const mlRlEntries = signalEntries.filter(([, s]) => Boolean(s?.ml?.label) || Boolean(s?.rl?.action))
 
   const placeOrder = (symbol, scalping) => {
     const o = {
@@ -525,7 +750,7 @@ export default function App() {
 
   const load = async () => {
     try {
-      const [marketRes, signalsRes, chainRes, oiRes, regimeRes, liqRes, stopRes, finalRes, historyRes, wsHealthRes] = await Promise.all([
+      const [marketRes, signalsRes, chainRes, oiRes, regimeRes, liqRes, stopRes, finalRes, wsHealthRes] = await Promise.all([
         fetchMarket(),
         fetchSignals(),
         fetchOptionChain().catch(() => ({ NIFTY: {}, SENSEX: {} })),
@@ -534,7 +759,6 @@ export default function App() {
         fetchLiquidityMap().catch(() => ({ liquidity_map: {} })),
         fetchStopHunts().catch(() => ({ stop_hunts: {} })),
         fetchFinalSignal().catch(() => ({ final_signal: {} })),
-        fetchSignalHistory('NIFTY', 50).catch(() => ({ symbol: 'NIFTY', history: [] })),
         fetchWsHealth().catch(() => ({ ws_health: {} })),
       ])
       setMarket(marketRes.market || {})
@@ -545,7 +769,6 @@ export default function App() {
       setLiquidityMap(liqRes.liquidity_map || {})
       setStopHunts(stopRes.stop_hunts || {})
       setFinalSignal(finalRes.final_signal || {})
-      setSignalHistory(historyRes?.history ? { symbol: historyRes.symbol || 'NIFTY', history: historyRes.history } : { symbol: 'NIFTY', history: [] })
       setWsHealth(wsHealthRes?.ws_health || {})
       setModelVersion(signalsRes.model_version || marketRes.model_version || null)
       setLastUpdate(new Date())
@@ -562,9 +785,9 @@ export default function App() {
   }, [])
 
   return (
-    <div className="min-h-screen bg-slate-950">
+    <div className="min-h-screen bg-slate-950 text-sm">
       <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-10">
-        <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
+        <div className="w-full max-w-[98vw] mx-auto px-2 py-2 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <h1 className="text-lg font-bold text-white font-mono">Free Quant Scalping AI</h1>
             <LiveBadge />
@@ -587,16 +810,17 @@ export default function App() {
         </div>
       </header>
 
-      <main className="max-w-6xl mx-auto px-4 py-6">
+      <main className="w-full max-w-[98vw] mx-auto px-2 py-3">
         {error && (
           <div className="mb-4 px-4 py-2 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-sm">
             {error} — Is the backend running on port 8001?
           </div>
         )}
+        <DashboardGuideTable />
 
         <section className="mb-8">
           <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Scalping signals</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {symbolOrder.map((symbol) => {
               const s = signals?.[symbol] || {}
               return (
@@ -614,213 +838,262 @@ export default function App() {
 
         <section className="mb-8">
           <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Placed orders (paper)</h2>
-          <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-4">
+          <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-3">
             <PlacedOrders orders={orders} onExit={exitOrder} />
           </div>
         </section>
 
-        <section className="mb-8">
-          <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Final signal (quant analytics)</h2>
-          <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-4">
-            <FinalSignalCard finalSignal={finalSignal} />
-          </div>
-        </section>
+        {hasFinalSignal && (
+          <section className="mb-8">
+            <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Final signal (quant analytics)</h2>
+            <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-3">
+              <FinalSignalCard finalSignal={finalSignal} />
+            </div>
+          </section>
+        )}
 
-        <section className="mb-8">
-          <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Signal history</h2>
-          <p className="text-xs text-slate-500 mb-2">Past signals given by the system (stored every ~60s). Newest first.</p>
-          <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-4">
-            <SignalHistoryPanel history={signalHistory.history} symbol={signalHistory.symbol} />
-          </div>
-        </section>
+        {hasMarketRegimeSection && (
+          <section className="mb-8">
+            <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Market regime indicator</h2>
+            <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-3">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                {Object.entries(marketRegime).length > 0 ? (
+                  Object.entries(marketRegime)
+                    .filter(([, r]) => r?.regime)
+                    .map(([symbol, r]) => (
+                      <div key={symbol} className="font-mono">
+                        <span className="text-slate-500 text-xs block mb-1">{symbol}</span>
+                        <MarketRegimeIndicator regime={r?.regime} confidence={r?.confidence} />
+                      </div>
+                    ))
+                ) : (
+                  signalEntries
+                    .filter(([, s]) => s?.regime?.regime)
+                    .map(([symbol, s]) => (
+                      <div key={symbol} className="font-mono">
+                        <span className="text-slate-500 text-xs block mb-1">{symbol}</span>
+                        <MarketRegimeIndicator regime={s?.regime?.regime} confidence={s?.regime?.confidence} />
+                      </div>
+                    ))
+                )}
+              </div>
+            </div>
+          </section>
+        )}
 
-        <section className="mb-8">
-          <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Market regime indicator</h2>
-          <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-              {Object.entries(marketRegime).length > 0 ? (
-                Object.entries(marketRegime).map(([symbol, r]) => (
-                  <div key={symbol} className="font-mono">
-                    <span className="text-slate-500 text-xs block mb-1">{symbol}</span>
-                    <MarketRegimeIndicator regime={r?.regime} confidence={r?.confidence} />
-                  </div>
-                ))
-              ) : (
-                Object.entries(signals).map(([symbol, s]) => (
-                  <div key={symbol} className="font-mono">
-                    <span className="text-slate-500 text-xs block mb-1">{symbol}</span>
-                    <MarketRegimeIndicator regime={s?.regime?.regime} confidence={s?.regime?.confidence} />
-                  </div>
-                ))
+        {hasOptionChainSection && (
+          <section className="mb-8">
+            <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Option chain heatmap (Angel live)</h2>
+            <div className="grid grid-cols-1 gap-3">
+              {(optionChain?.NIFTY?.chain && Object.keys(optionChain.NIFTY.chain).length > 0) && (
+                <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-3">
+                  <div className="text-slate-500 text-xs mb-2">NIFTY</div>
+                  <OptionChainHeatmap optionChainData={optionChain?.NIFTY || {}} />
+                </div>
+              )}
+              {(optionChain?.SENSEX?.chain && Object.keys(optionChain.SENSEX.chain).length > 0) && (
+                <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-3">
+                  <div className="text-slate-500 text-xs mb-2">SENSEX</div>
+                  <OptionChainHeatmap optionChainData={optionChain?.SENSEX || {}} />
+                </div>
               )}
             </div>
-          </div>
-        </section>
+          </section>
+        )}
 
-        <section className="mb-8">
-          <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Option chain heatmap (Angel live)</h2>
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-4">
-              <div className="text-slate-500 text-xs mb-2">NIFTY</div>
-              <OptionChainHeatmap optionChainData={optionChain?.NIFTY || {}} />
-            </div>
-            <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-4">
-              <div className="text-slate-500 text-xs mb-2">SENSEX</div>
-              <OptionChainHeatmap optionChainData={optionChain?.SENSEX || {}} />
-            </div>
-          </div>
-        </section>
+        {(hasWsHealthSection || oiEntries.length > 0) && (
+          <section className="grid grid-cols-1 xl:grid-cols-2 gap-3 mb-8">
+            {hasWsHealthSection && (
+              <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-3">
+                <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">WS health (ltp / oi / volume coverage)</h2>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {['NIFTY', 'SENSEX']
+                    .filter((sym) => {
+                      const h = wsHealth?.[sym]?.coverage || {}
+                      return (h.strikes ?? 0) > 0 || (h.legs ?? 0) > 0
+                    })
+                    .map((sym) => {
+                      const h = wsHealth?.[sym]?.coverage || {}
+                      const wsGuide = getWsDecisionGuide(h)
+                      return (
+                        <div key={sym} className="rounded-lg border border-slate-700 bg-slate-900/50 p-3 font-mono text-xs">
+                          <div className="text-slate-400 mb-2">{sym} @ {wsHealth?.[sym]?.index_price != null ? Number(wsHealth[sym].index_price).toFixed(2) : '–'}</div>
+                          <div className="grid grid-cols-2 gap-y-1">
+                            <span className="text-slate-500">Strikes</span><span className="text-slate-200">{h.strikes ?? 0}</span>
+                            <span className="text-slate-500">Legs</span><span className="text-slate-200">{h.legs ?? 0}</span>
+                            <span className="text-slate-500">LTP</span><span className="text-emerald-400">{h.ltp_pct ?? 0}%</span>
+                            <span className="text-slate-500">OI</span><span className="text-cyan-400">{h.oi_pct ?? 0}%</span>
+                            <span className="text-slate-500">Volume</span><span className="text-amber-400">{h.volume_pct ?? 0}%</span>
+                            <span className="text-slate-500">OI change</span><span className="text-violet-400">{h.oi_change_pct ?? 0}%</span>
+                          </div>
+                          <div className="mt-2 pt-2 border-t border-slate-700/60 space-y-1">
+                            <div className="text-slate-500">
+                              Quality: <span className={wsGuide.quality === 'HIGH' ? 'text-emerald-400' : wsGuide.quality === 'MEDIUM' ? 'text-amber-300' : 'text-red-400'}>{wsGuide.quality}</span>
+                            </div>
+                            <div className="text-slate-400">
+                              Impact: <span className="text-slate-300">{wsGuide.impact}</span>
+                            </div>
+                            <div className="text-slate-400">
+                              Decision: <span className="text-cyan-300">{wsGuide.decision}</span>
+                            </div>
+                          </div>
+                        </div>
+                      )
+                    })}
+                </div>
+              </div>
+            )}
+            {oiEntries.length > 0 && (
+              <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-3">
+                <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">OI analysis</h2>
+                {oiEntries.map(([sym, data]) => {
+                  const oiGuide = getOiDecisionGuide(data)
+                  return (
+                  <div key={sym} className="mb-3">
+                    <span className="text-slate-500 text-xs">{sym}: </span>
+                    <OiAnalysis oi={data} />
+                    <div className="mt-1 pt-1 border-t border-slate-700/60 text-xs space-y-1">
+                      <div className="text-slate-400">
+                        Bias: <span className={oiGuide.bias === 'BULLISH' ? 'text-emerald-400' : oiGuide.bias === 'BEARISH' ? 'text-red-400' : 'text-amber-300'}>{oiGuide.bias}</span>
+                      </div>
+                      <div className="text-slate-400">
+                        Impact: <span className="text-slate-300">{oiGuide.structure}</span>
+                      </div>
+                      <div className="text-slate-400">
+                        Decision: <span className="text-cyan-300">{oiGuide.decision}</span>
+                      </div>
+                    </div>
+                  </div>
+                )})}
+              </div>
+            )}
+          </section>
+        )}
 
-        <section className="mb-8">
-          <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">WS health (ltp / oi / volume coverage)</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {['NIFTY', 'SENSEX'].map((sym) => {
-              const h = wsHealth?.[sym]?.coverage || {}
-              return (
-                <div key={sym} className="rounded-lg border border-slate-700 bg-slate-900/50 p-4 font-mono text-xs">
-                  <div className="text-slate-400 mb-2">{sym} @ {wsHealth?.[sym]?.index_price != null ? Number(wsHealth[sym].index_price).toFixed(2) : '–'}</div>
-                  <div className="grid grid-cols-2 gap-y-1">
-                    <span className="text-slate-500">Strikes</span><span className="text-slate-200">{h.strikes ?? 0}</span>
-                    <span className="text-slate-500">Legs</span><span className="text-slate-200">{h.legs ?? 0}</span>
-                    <span className="text-slate-500">LTP</span><span className="text-emerald-400">{h.ltp_pct ?? 0}%</span>
-                    <span className="text-slate-500">OI</span><span className="text-cyan-400">{h.oi_pct ?? 0}%</span>
-                    <span className="text-slate-500">Volume</span><span className="text-amber-400">{h.volume_pct ?? 0}%</span>
-                    <span className="text-slate-500">OI change</span><span className="text-violet-400">{h.oi_change_pct ?? 0}%</span>
+        {(liquidityEntries.length > 0 || stopHuntEntries.length > 0) && (
+          <section className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+            {liquidityEntries.length > 0 && (
+              <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-3">
+                <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Liquidity map</h2>
+                {liquidityEntries.map(([symbol, lm]) => (
+                  <div key={symbol} className="mb-3">
+                    <span className="text-slate-500 text-xs block mb-1">{symbol}</span>
+                    <LiquidityMapPanel liquidityMap={lm} />
+                  </div>
+                ))}
+              </div>
+            )}
+            {stopHuntEntries.length > 0 && (
+              <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-3">
+                <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Stop-hunt detection</h2>
+                {stopHuntEntries.map(([symbol, sh]) => (
+                  <div key={symbol} className="mb-3">
+                    <span className="text-slate-500 text-xs block mb-1">{symbol}</span>
+                    <StopHuntPanel stopHunt={sh} />
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
+
+        {(gexEntries.length > 0 || maxPainEntries.length > 0 || expiryEntries.length > 0) && (
+          <section className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-8">
+            {gexEntries.length > 0 && (
+              <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-3">
+                <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Gamma exposure (GEX)</h2>
+                {gexEntries.map(([symbol, s]) => (
+                  <div key={symbol}>
+                    <span className="text-slate-500 text-xs block mb-2">{symbol}</span>
+                    <GammaExposureChart gammaLevels={s?.gamma_levels} />
+                  </div>
+                ))}
+              </div>
+            )}
+            {maxPainEntries.length > 0 && (
+              <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-3">
+                <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Max pain</h2>
+                {maxPainEntries.map(([symbol, s]) => (
+                  <div key={symbol} className="mb-3">
+                    <span className="text-slate-500 text-xs block mb-1">{symbol}</span>
+                    <MaxPainIndicator maxPain={s?.max_pain} spot={market[symbol]?.last_price} />
+                  </div>
+                ))}
+              </div>
+            )}
+            {expiryEntries.length > 0 && (
+              <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-3">
+                <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Expiry bias</h2>
+                {expiryEntries.map(([symbol, s]) => (
+                  <div key={symbol} className="mb-3">
+                    <span className="text-slate-500 text-xs block mb-1">{symbol}</span>
+                    <ExpiryBiasIndicator bias={s?.expiry_bias} expectedRange={s?.expiry_bias_range} />
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
+
+        {(institutionalFlowEntries.length > 0 || gammaExpiryEntries.length > 0) && (
+          <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            {institutionalFlowEntries.length > 0 && (
+              <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-3">
+                <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Institutional flow</h2>
+                {institutionalFlowEntries.map(([symbol, s]) => (
+                  <div key={symbol} className="font-mono text-sm text-slate-300 mb-1">
+                    {symbol}: {s?.institutional_flow?.description ?? '–'}
+                    {s?.institutional_flow?.put_call_ratio != null && (
+                      <span className="text-slate-500 ml-1">PCR: {Number(s.institutional_flow.put_call_ratio).toFixed(2)}</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+            {gammaExpiryEntries.length > 0 && (
+              <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-3">
+                <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Gamma, Expiry & Liquidity</h2>
+                {gammaExpiryEntries.map(([symbol, s]) => (
+                  <div key={symbol} className="mb-3">
+                    <span className="text-slate-500 text-xs block mb-1">{symbol}:</span>
+                    <GammaExpiry gamma={s?.gamma} expiry={s?.expiry} />
+                    {s?.liquidity_sweep?.detected && (
+                      <div className="mt-1 text-xs font-mono text-amber-400">
+                        Sweep: {s.liquidity_sweep.direction} ({Math.round(s.liquidity_sweep.confidence)}%)
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
+
+        {mlRlEntries.length > 0 && (
+          <section className="mt-6 rounded-lg border border-slate-700 bg-slate-900/50 p-3">
+            <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">ML / RL</h2>
+            <div className="flex flex-wrap gap-6">
+              {mlRlEntries.map(([symbol, s]) => {
+                const mlGuide = getMlRlDecisionGuide(s)
+                return (
+                <div key={symbol} className="font-mono text-sm min-w-[320px] max-w-[520px] rounded border border-slate-700/60 bg-slate-900/40 p-2">
+                  <div>
+                    <span className="text-slate-500">{symbol}:</span>{' '}
+                    <span className="text-slate-300">ML {mlGuide.ml}</span>
+                    <span className="text-slate-600 mx-1">|</span>
+                    <span className="text-slate-300">RL {mlGuide.rl}</span>
+                  </div>
+                  <div className="mt-1 text-xs text-slate-400">
+                    Impact: <span className="text-slate-300">{mlGuide.impact}</span>
+                  </div>
+                  <div className="text-xs text-slate-400">
+                    Decision: <span className="text-cyan-300">{mlGuide.decision}</span>
                   </div>
                 </div>
-              )
-            })}
-          </div>
-        </section>
-
-        <section className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-          <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-4">
-            <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Liquidity map</h2>
-            {Object.entries(liquidityMap).length > 0 ? (
-              Object.entries(liquidityMap).map(([symbol, lm]) => (
-                <div key={symbol} className="mb-3">
-                  <span className="text-slate-500 text-xs block mb-1">{symbol}</span>
-                  <LiquidityMapPanel liquidityMap={lm} />
-                </div>
-              ))
-            ) : (
-              Object.entries(signals).map(([symbol, s]) => (
-                <div key={symbol} className="mb-3">
-                  <span className="text-slate-500 text-xs block mb-1">{symbol}</span>
-                  <LiquidityMapPanel liquidityMap={s?.liquidity_map} />
-                </div>
-              ))
-            )}
-          </div>
-          <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-4">
-            <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Stop-hunt detection</h2>
-            {Object.entries(stopHunts).length > 0 ? (
-              Object.entries(stopHunts).map(([symbol, sh]) => (
-                <div key={symbol} className="mb-3">
-                  <span className="text-slate-500 text-xs block mb-1">{symbol}</span>
-                  <StopHuntPanel stopHunt={sh} />
-                </div>
-              ))
-            ) : (
-              Object.entries(signals).map(([symbol, s]) => (
-                <div key={symbol} className="mb-3">
-                  <span className="text-slate-500 text-xs block mb-1">{symbol}</span>
-                  <StopHuntPanel stopHunt={s?.stop_hunt} />
-                </div>
-              ))
-            )}
-          </div>
-        </section>
-
-        <section className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
-          <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-4">
-            <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Gamma exposure (GEX)</h2>
-            {Object.entries(signals).map(([symbol, s]) => (
-              <div key={symbol}>
-                <span className="text-slate-500 text-xs block mb-2">{symbol}</span>
-                <GammaExposureChart gammaLevels={s?.gamma_levels} />
-              </div>
-            ))}
-          </div>
-          <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-4">
-            <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Max pain</h2>
-            {Object.entries(signals).map(([symbol, s]) => (
-              <div key={symbol} className="mb-3">
-                <span className="text-slate-500 text-xs block mb-1">{symbol}</span>
-                <MaxPainIndicator maxPain={s?.max_pain} spot={market[symbol]?.last_price} />
-              </div>
-            ))}
-          </div>
-          <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-4">
-            <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Expiry bias</h2>
-            {Object.entries(signals).map(([symbol, s]) => (
-              <div key={symbol} className="mb-3">
-                <span className="text-slate-500 text-xs block mb-1">{symbol}</span>
-                <ExpiryBiasIndicator bias={s?.expiry_bias} expectedRange={s?.expiry_bias_range} />
-              </div>
-            ))}
-          </div>
-        </section>
-
-        <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-          <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-4">
-            <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Institutional flow</h2>
-            {Object.entries(signals).map(([symbol, s]) => (
-              <div key={symbol} className="font-mono text-sm text-slate-300 mb-1">
-                {symbol}: {s?.institutional_flow?.description ?? '–'}
-                {s?.institutional_flow?.put_call_ratio != null && (
-                  <span className="text-slate-500 ml-1">PCR: {Number(s.institutional_flow.put_call_ratio).toFixed(2)}</span>
-                )}
-              </div>
-            ))}
-          </div>
-          <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-4">
-            <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">OI analysis</h2>
-            {Object.keys(oi).length > 0 ? (
-              Object.entries(oi).map(([sym, data]) => (
-                <div key={sym} className="mb-2">
-                  <span className="text-slate-500 text-xs">{sym}: </span>
-                  <OiAnalysis oi={data} />
-                </div>
-              ))
-            ) : (
-              Object.entries(signals).map(([symbol, s]) => (
-                <div key={symbol}>
-                  <span className="text-slate-500 text-xs">{symbol}: </span>
-                  <OiAnalysis oi={s?.oi_analysis} />
-                </div>
-              ))
-            )}
-          </div>
-          <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-4">
-            <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Gamma, Expiry & Liquidity</h2>
-            {Object.entries(signals).map(([symbol, s]) => (
-              <div key={symbol} className="mb-3">
-                <span className="text-slate-500 text-xs block mb-1">{symbol}:</span>
-                <GammaExpiry gamma={s?.gamma} expiry={s?.expiry} />
-                {s?.liquidity_sweep?.detected && (
-                  <div className="mt-1 text-xs font-mono text-amber-400">
-                    Sweep: {s.liquidity_sweep.direction} ({Math.round(s.liquidity_sweep.confidence)}%)
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        </section>
-
-        <section className="mt-6 rounded-lg border border-slate-700 bg-slate-900/50 p-4">
-          <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">ML / RL</h2>
-          <div className="flex flex-wrap gap-6">
-            {Object.entries(signals).map(([symbol, s]) => (
-              <div key={symbol} className="font-mono text-sm">
-                <span className="text-slate-500">{symbol}:</span>{' '}
-                <span className="text-slate-300">ML {s?.ml?.label ?? '–'}</span>
-                <span className="text-slate-600 mx-1">|</span>
-                <span className="text-slate-300">RL {s?.rl?.action ?? '–'}</span>
-              </div>
-            ))}
-          </div>
-        </section>
+              )})}
+            </div>
+          </section>
+        )}
       </main>
     </div>
   )
