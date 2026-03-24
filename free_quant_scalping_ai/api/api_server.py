@@ -1,12 +1,22 @@
 from __future__ import annotations
 
 import asyncio
+import gzip
 import json
 import os
+import shutil
+import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
+
+try:
+    from zoneinfo import ZoneInfo
+
+    _IST_TZ = ZoneInfo("Asia/Kolkata")
+except Exception:  # pragma: no cover — tzdata missing / very old Python
+    _IST_TZ = timezone(timedelta(hours=5, minutes=30))
 
 import pandas as pd
 
@@ -31,6 +41,7 @@ from scalping_fast import compute_fast_confidence, generate_fast_scalping_signal
 from training.daily_trainer import train_models
 from utils.logger import get_logger
 
+import paper_trader
 
 logger = get_logger(__name__)
 
@@ -64,6 +75,101 @@ state: Dict[str, Dict] = {
 
 _scheduler: BackgroundScheduler | None = None
 _SIGNAL_LOG_PATH = Path(os.getenv("SIGNAL_RECORD_FILE", "logs/signal_events.jsonl"))
+_REPLAY_SIGNAL_LOG_PATH = Path("logs/replay_signals.jsonl")
+_SIMULATION_MODE = os.getenv("SIMULATION_MODE", "").strip().lower() in ("1", "true", "yes", "on")
+_SIMULATION_SPEED = os.getenv("SIMULATION_SPEED", "").strip().lower()
+
+_REPLAY_LOG_DIR = Path("logs")
+_REPLAY_LOCK = threading.Lock()
+_REPLAY_STATE: Dict[str, Optional[str]] = {"active_date": None}
+
+
+def _replay_indian_market_open(now_ist: datetime) -> bool:
+    """True iff now_ist is within replay session 09:15–15:30 IST (inclusive)."""
+    t = now_ist.time()
+    return (t.hour, t.minute, t.second) >= (9, 15, 0) and (t.hour, t.minute, t.second) <= (15, 30, 59)
+
+
+def _simulation_replay_window_open() -> bool:
+    """Simulation replay is allowed only during today's 09:15–15:30 IST session."""
+    now_ist = datetime.now(_IST_TZ)
+    return _replay_indian_market_open(now_ist)
+
+
+def _replay_path_for_date(date_str: str) -> Path:
+    return _REPLAY_LOG_DIR / f"replay_{date_str}.jsonl"
+
+
+def _gzip_replay_jsonl(jsonl_path: Path) -> None:
+    """Sync gzip of one JSONL to .jsonl.gz; removes source on success."""
+    gz_path = jsonl_path.with_name(jsonl_path.name + ".gz")
+    if not jsonl_path.is_file():
+        return
+    if gz_path.is_file():
+        return
+    with jsonl_path.open("rb") as f_in:
+        with gzip.open(gz_path, "wb", compresslevel=6, mtime=0) as f_out:
+            shutil.copyfileobj(f_in, f_out)
+    try:
+        jsonl_path.unlink()
+    except OSError:
+        pass
+
+
+def _spawn_replay_gzip(jsonl_path: Path) -> None:
+    def _run() -> None:
+        try:
+            _gzip_replay_jsonl(jsonl_path)
+        except Exception:
+            pass
+
+    threading.Thread(target=_run, name="replay-gzip", daemon=True).start()
+
+
+def record_replay_tick(
+    symbol: str,
+    price: Any,
+    chain_snapshot: Any,
+    signal: Any,
+    entry_decision: Any,
+) -> None:
+    """Append one JSON line for replay; IST session only; daily rotate + bg gzip."""
+    try:
+        if price is None:
+            return
+        try:
+            p = float(price)
+        except (TypeError, ValueError):
+            return
+        if p <= 0:
+            return
+        if not chain_snapshot:
+            return
+        now_ist = datetime.now(_IST_TZ)
+        if not _replay_indian_market_open(now_ist):
+            return
+        row = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "symbol": symbol,
+            "price": p,
+            "option_chain": chain_snapshot,
+            "signal": signal,
+            "entry_decision": entry_decision,
+        }
+        line = json.dumps(row, default=str, ensure_ascii=True) + "\n"
+        date_str = now_ist.date().isoformat()
+        with _REPLAY_LOCK:
+            prev = _REPLAY_STATE["active_date"]
+            if prev != date_str:
+                _REPLAY_STATE["active_date"] = date_str
+                if prev:
+                    _spawn_replay_gzip(_replay_path_for_date(prev))
+            path = _replay_path_for_date(date_str)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as f:
+                f.write(line)
+    except Exception:
+        pass
 
 
 def _store_fast_signal_safe(symbol: str, ts: datetime, payload: Dict[str, Any]) -> None:
@@ -101,6 +207,27 @@ def _append_signal_record_safe(symbol: str, ts: datetime, payload: Dict[str, Any
             f.write(json.dumps(row, ensure_ascii=True, default=str) + "\n")
     except Exception as exc:
         logger.debug("Failed to append signal record for %s: %s", symbol, exc)
+
+
+def _append_replay_signal_record_safe(symbol: str, ts: datetime, payload: Dict[str, Any], price: float) -> None:
+    """Replay-only signal file; generated from live compute path (no file reads)."""
+    try:
+        _REPLAY_SIGNAL_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        row = {
+            "ts": ts.isoformat(),
+            "symbol": symbol,
+            "signal": payload.get("signal"),
+            "entry_decision": payload.get("entry_decision"),
+            "price": price,
+            "strike": payload.get("strike"),
+            "entry": payload.get("entry"),
+            "target": payload.get("target"),
+            "stoploss": payload.get("stoploss"),
+        }
+        with _REPLAY_SIGNAL_LOG_PATH.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(row, ensure_ascii=True, default=str) + "\n")
+    except Exception as exc:
+        logger.debug("Failed to append replay signal record for %s: %s", symbol, exc)
 
 
 async def compute_for_symbol(symbol: str):
@@ -263,6 +390,11 @@ async def compute_for_symbol(symbol: str):
     scalping_signal = rule_signal
     hero_zero = detect_hero_zero_fast(chain_snapshot, float(price or 0.0))
     confidence = compute_fast_confidence(features)
+    call_oi = float(features.get("call_oi_strength") or 0.0)
+    put_oi = float(features.get("put_oi_strength") or 0.0)
+    call_vol = float(features.get("call_volume_strength") or 0.0)
+    put_vol = float(features.get("put_volume_strength") or 0.0)
+    mom = float(features.get("price_momentum") or 0.0)
     # ML fallback: if rule engine is flat, allow strong ML direction.
     if scalping_signal == "NO_TRADE" and ml_signal.get("label") in ("BUY_CE", "BUY_PE"):
         if int(ml_signal.get("confidence") or 0) >= 65:
@@ -294,11 +426,6 @@ async def compute_for_symbol(symbol: str):
     # High-confidence neutral tie-breaker:
     # when rule/ML end up NO_TRADE but feature bias is clearly one-sided, pick that side.
     if scalping_signal == "NO_TRADE":
-        call_oi = float(features.get("call_oi_strength") or 0.0)
-        put_oi = float(features.get("put_oi_strength") or 0.0)
-        call_vol = float(features.get("call_volume_strength") or 0.0)
-        put_vol = float(features.get("put_volume_strength") or 0.0)
-        mom = float(features.get("price_momentum") or 0.0)
         ce_bias = 0.45 * call_oi + 0.45 * call_vol + 0.10 * max(0.0, mom * 2000.0)
         pe_bias = 0.45 * put_oi + 0.45 * put_vol + 0.10 * max(0.0, -mom * 2000.0)
         bias_gap = abs(ce_bias - pe_bias)
@@ -309,10 +436,52 @@ async def compute_for_symbol(symbol: str):
                 scalping_signal = "BUY_PE"
             confidence = max(confidence, 66 if su == "SENSEX" else 70)
 
+    # Trend filter (fixed small window): block opposite-direction entries.
+    trend = 0.0
+    if len(sym_hist) >= 24:
+        recent = sym_hist[-12:]
+        prior = sym_hist[-24:-12]
+        if prior:
+            trend = (sum(recent) / len(recent)) - (sum(prior) / len(prior))
+    trend_block = (6.0 if su == "SENSEX" else 2.5)
+    if scalping_signal == "BUY_CE" and trend < -trend_block:
+        scalping_signal = "NO_TRADE"
+    elif scalping_signal == "BUY_PE" and trend > trend_block:
+        scalping_signal = "NO_TRADE"
+
+    # Volatility filter (fixed small window): avoid directional trades in flat tape.
+    if len(sym_hist) >= 20 and scalping_signal in ("BUY_CE", "BUY_PE"):
+        win = sym_hist[-20:]
+        mid = max(1.0, float(price or 0.0))
+        vol_pct = (max(win) - min(win)) / mid
+        min_vol = 0.0012 if su == "SENSEX" else 0.0006
+        if vol_pct < min_vol:
+            scalping_signal = "NO_TRADE"
+
+    # Side-balance dampener: reduce one-sided streaks with weak edge.
+    bal_state = state.setdefault("_side_balance", {})
+    sb = bal_state.setdefault(symbol, {"ce": 0.0, "pe": 0.0})
+    sb["ce"] = float(sb.get("ce", 0.0)) * 0.97
+    sb["pe"] = float(sb.get("pe", 0.0)) * 0.97
+    if scalping_signal == "BUY_CE":
+        sb["ce"] += 1.0
+    elif scalping_signal == "BUY_PE":
+        sb["pe"] += 1.0
+    skew = sb["pe"] - sb["ce"]
+    edge_gap = abs((call_oi + call_vol) - (put_oi + put_vol))
+    if scalping_signal == "BUY_PE" and skew > 6.0 and edge_gap < 0.20:
+        scalping_signal = "NO_TRADE"
+    elif scalping_signal == "BUY_CE" and skew < -6.0 and edge_gap < 0.20:
+        scalping_signal = "NO_TRADE"
+
     # Signal stabilizer + entry lock (actionable decision layer).
     MIN_CONF = 60 if su == "SENSEX" else 68
     STABLE_CYCLES = 2 if su == "SENSEX" else 4
-    ENTRY_LOCK_SEC = 45.0
+    try:
+        default_lock = "5.0" if symbol == "NIFTY" else "8.0"
+        ENTRY_LOCK_SEC = float(os.getenv(f"ENTRY_LOCK_SEC_{su}", default_lock))
+    except ValueError:
+        ENTRY_LOCK_SEC = 5.0 if symbol == "NIFTY" else 8.0
     decision_state = state.setdefault("_decision_state", {})
     ds = decision_state.setdefault(
         symbol,
@@ -365,7 +534,18 @@ async def compute_for_symbol(symbol: str):
     entry_decision = "HOLD"
     decision_reason = "no_trade_signal"
     if locked:
-        decision_reason = f"entry_lock_active_{int(round(lock_remaining))}s"
+        prev_price = float(state["market"].get(symbol, {}).get("last_price") or price)
+        lock_move = 6 if symbol == "NIFTY" else 20
+        high_conf_unlock = (
+            scalping_signal in ("BUY_CE", "BUY_PE")
+            and confidence >= (82 if su == "NIFTY" else 78)
+            and ds.get("last_signal") == scalping_signal
+        )
+        if abs(price - prev_price) >= lock_move or high_conf_unlock:
+            entry_decision = scalping_signal
+            decision_reason = "reentry_on_momentum" if not high_conf_unlock else "reentry_high_conf"
+        else:
+            decision_reason = f"entry_lock_active_{int(round(lock_remaining))}s"
     elif scalping_signal not in ("BUY_CE", "BUY_PE"):
         decision_reason = "signal_not_directional"
     elif confidence < MIN_CONF:
@@ -401,39 +581,48 @@ async def compute_for_symbol(symbol: str):
             return None
         if not strikes:
             return None
-        # Basic ATM step
-        step = strikes[1] - strikes[0] if len(strikes) > 1 else 50.0
-        atm = min(strikes, key=lambda s: abs(s - ref_price))
-        candidates: list[float] = [atm]
-        if trade == "BUY_CE":
-            up = atm + step
-            if up in strikes:
-                candidates.append(up)
-        elif trade == "BUY_PE":
-            down = atm - step
-            if down in strikes:
-                candidates.append(down)
+        strike_step = abs(strikes[1] - strikes[0]) if len(strikes) > 1 else 50.0
+        if strike_step <= 0:
+            strike_step = 50.0
+        atm = round(ref_price / strike_step) * strike_step
+
+        # O(1) scan: fixed 5 strikes around ATM.
+        candidates = [atm - 100.0, atm - 50.0, atm, atm + 50.0, atm + 100.0]
+        best: Optional[Dict[str, Any]] = None
+        best_score = -1.0
+
         for s_val in candidates:
-            key = str(int(s_val))
+            key = str(int(round(s_val)))
             row = chain.get(key) or {}
-            leg = row.get(side)
+            leg = row.get(side) if isinstance(row, dict) else None
             if not isinstance(leg, dict):
                 continue
-            ltp = leg.get("ltp")
-            vol = float(leg.get("volume") or 0.0)
-            oi = float(leg.get("oi") or 0.0)
-            if ltp is None:
-                continue
-            # LTP-only ticks (mode 1) lack OI/volume; still allow strike pick
-            if vol <= 0 and oi <= 0:
-                vol, oi = 1.0, 1.0
-            elif vol <= 0 or oi <= 0:
-                continue
             try:
-                premium = float(ltp)
+                premium = float(leg.get("ltp"))
             except (TypeError, ValueError):
                 continue
-            return {"strike": s_val, "type": side, "premium": premium}
+            if premium < 80.0 or premium > 250.0:
+                continue
+            vol = float(leg.get("volume") or 0.0)
+            oi = float(leg.get("oi") or 0.0)
+            score = vol + oi
+            if score > best_score:
+                best_score = score
+                best = {"strike": s_val, "type": side, "premium": premium}
+
+        if best is not None:
+            return best
+
+        # Fallback: pick ATM strike.
+        atm_key = str(int(round(atm)))
+        atm_row = chain.get(atm_key) or {}
+        atm_leg = atm_row.get(side) if isinstance(atm_row, dict) else None
+        if isinstance(atm_leg, dict):
+            try:
+                atm_premium = float(atm_leg.get("ltp"))
+                return {"strike": atm, "type": side, "premium": atm_premium}
+            except (TypeError, ValueError):
+                pass
         return None
 
     if scalping_signal in ("BUY_CE", "BUY_PE"):
@@ -442,7 +631,7 @@ async def compute_for_symbol(symbol: str):
             s_val = sel["strike"]
             premium = sel["premium"]
             strike_label = f"{int(s_val)} {'CE' if scalping_signal == 'BUY_CE' else 'PE'}"
-            entry = premium
+            entry = round(premium * 1.002, 2)
             target = round(premium * 1.4, 2)
             stoploss = round(premium * 0.8, 2)
 
@@ -462,6 +651,16 @@ async def compute_for_symbol(symbol: str):
         "stoploss": stoploss,
         "price_source": price_source,
     }
+
+    record_replay_tick(
+        symbol,
+        price,
+        chain_snapshot,
+        final_fast.get("signal"),
+        final_fast.get("entry_decision"),
+    )
+
+    paper_trader.process_tick(symbol, final_fast, chain_snapshot, state)
 
     ts = datetime.now(timezone.utc)
     state["market"][symbol] = {
@@ -521,13 +720,15 @@ async def compute_for_symbol(symbol: str):
     # Conditional, rate-limited, async DB write:
     #   - only when signal != NO_TRADE OR confidence >= 60
     #   - at most once every 10 seconds per symbol
+    #   - BUT always persist fresh directional entry decisions immediately
     if scalping_signal != "NO_TRADE" or confidence >= 60:
         cooldown_state = state.setdefault("_fast_store_cooldown", {})
         last_ts = cooldown_state.get(symbol)
         allow_write = True
+        force_write = entry_decision in ("BUY_CE", "BUY_PE")
         if isinstance(last_ts, datetime):
             delta = (ts - last_ts).total_seconds()
-            if delta < 10.0:
+            if delta < 10.0 and not force_write:
                 allow_write = False
         if allow_write:
             cooldown_state[symbol] = ts
@@ -541,11 +742,13 @@ async def compute_for_symbol(symbol: str):
                 _store_fast_signal_safe(symbol, ts, final_fast)
 
     # Always-on local signal recording (all states, including HOLD/NO_TRADE), throttled.
+    # Directional entry decisions are always recorded immediately so they are never masked by lock-state HOLD rows.
     record_state = state.setdefault("_signal_record_cooldown", {})
     last_rec = float(record_state.get(symbol) or 0.0)
     now_ts = time.time()
     # Keep file size manageable while still being near real-time.
-    if (now_ts - last_rec) >= 2.0:
+    force_record = entry_decision in ("BUY_CE", "BUY_PE")
+    if force_record or (now_ts - last_rec) >= 2.0:
         record_state[symbol] = now_ts
         try:
             loop = asyncio.get_running_loop()
@@ -556,6 +759,16 @@ async def compute_for_symbol(symbol: str):
         else:
             _append_signal_record_safe(symbol, ts, final_fast)
 
+    if _SIMULATION_MODE and _simulation_replay_window_open():
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop is not None:
+            loop.run_in_executor(None, _append_replay_signal_record_safe, symbol, ts, final_fast, float(price or 0.0))
+        else:
+            _append_replay_signal_record_safe(symbol, ts, final_fast, float(price or 0.0))
+
     if scalping_signal != "NO_TRADE":
         logger.info("[FAST SIGNAL] %s price=%s confidence=%s", scalping_signal, price, confidence)
 
@@ -563,11 +776,16 @@ async def compute_for_symbol(symbol: str):
 
 async def main_loop():
     while True:
+        if _SIMULATION_MODE and not _simulation_replay_window_open():
+            await asyncio.sleep(0.5)
+            continue
         for symbol in settings.indices:
             try:
                 await compute_for_symbol(symbol)
             except Exception as exc:
                 logger.exception("Error in main loop for %s: %s", symbol, exc)
+        if _SIMULATION_MODE and _SIMULATION_SPEED == "fast":
+            continue
         await asyncio.sleep(0.5)  # low-latency cadence
 
 
@@ -976,6 +1194,12 @@ async def get_stop_hunts():
 async def get_final_signal():
     """Final combined signal per symbol (Section 19 format)."""
     return {"final_signal": state.get("final_signal", {})}
+
+
+@app.get("/paper-trades")
+async def get_paper_trades():
+    """Paper-trading dashboard payload (active legs, stats, last trade, guide)."""
+    return {"paper_trades": state.get("paper_trades", {"active": {}, "stats": {}, "last_trade": None, "guide": {}})}
 
 
 @app.get("/signal-history")

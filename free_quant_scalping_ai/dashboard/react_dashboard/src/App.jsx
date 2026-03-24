@@ -10,7 +10,7 @@ import {
   Legend,
 } from 'chart.js'
 import { Bar } from 'react-chartjs-2'
-import { fetchMarket, fetchSignals, fetchOptionChain, fetchOi, fetchMarketRegime, fetchLiquidityMap, fetchStopHunts, fetchFinalSignal, fetchWsHealth } from './api'
+import { fetchMarket, fetchSignals, fetchOptionChain, fetchOi, fetchMarketRegime, fetchLiquidityMap, fetchStopHunts, fetchFinalSignal, fetchWsHealth, fetchPaperTrades } from './api'
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, PointElement, Title, Tooltip, Legend)
 
@@ -440,6 +440,146 @@ function PlacedOrders({ orders, onExit }) {
   )
 }
 
+function lastTradeResultClass(result) {
+  const r = String(result || '').toUpperCase()
+  if (r === 'FULL_TARGET') return 'text-emerald-400'
+  if (r === 'TRAIL_EXIT') return 'text-cyan-400'
+  if (r === 'LOSS') return 'text-red-400'
+  return 'text-slate-300'
+}
+
+/** CE/PE from API or parsed from strike/leg text (older payloads). */
+function inferLastTradeSide(lt) {
+  if (!lt) return null
+  const t = String(lt.type || lt.side || '').toUpperCase()
+  if (t === 'CE' || t === 'PE') return t
+  const s = `${lt.strike || ''} ${lt.leg || ''}`
+  if (/\bCE\b/i.test(s) || / CE$/i.test(String(lt.strike || '').trim())) return 'CE'
+  if (/\bPE\b/i.test(s) || / PE$/i.test(String(lt.strike || '').trim())) return 'PE'
+  return null
+}
+
+function PaperTradesPanel({ paperTrades }) {
+  const pt = paperTrades || {}
+  const stats = pt.stats || {}
+  const active = pt.active || {}
+  const lastTrade = pt.last_trade
+  const lastClosedSide = lastTrade ? inferLastTradeSide(lastTrade) : null
+  const guide = pt.guide || {}
+  const activeEntries = Object.entries(active)
+  return (
+    <div className="space-y-3">
+      <div className="rounded-lg border-2 border-violet-500/40 bg-violet-500/5 p-4">
+        <h3 className="text-xs font-semibold text-violet-300 uppercase tracking-wider mb-3">Last closed trade</h3>
+        {lastTrade ? (
+          <div className="space-y-3">
+            <div className="font-mono">
+              <div className="text-slate-500 text-xs mb-1">Option leg (strike · CE/PE)</div>
+              <div className="text-lg text-white font-semibold tracking-tight">
+                {lastTrade.leg
+                  || [lastTrade.symbol, lastTrade.strike].filter(Boolean).join(' ')
+                  || lastTrade.symbol
+                  || '–'}
+              </div>
+              {lastClosedSide && (
+                <div className="mt-2 inline-flex flex-wrap items-center gap-2 rounded-md border border-slate-600 bg-slate-900/80 px-3 py-1.5">
+                  <span className="text-slate-500 text-xs uppercase">This trade was</span>
+                  <span className={`text-base font-bold ${lastClosedSide === 'CE' ? 'text-cyan-400' : 'text-amber-400'}`}>{lastClosedSide}</span>
+                  <span className="text-slate-500 text-xs">({lastClosedSide === 'CE' ? 'Call' : 'Put'} option)</span>
+                </div>
+              )}
+              {!lastTrade.leg && (lastTrade.type || lastTrade.strike) && (
+                <div className="text-sm text-slate-400 mt-1">
+                  {lastTrade.type && <span className="text-cyan-400 font-medium">{lastTrade.type}</span>}
+                  {lastTrade.type && lastTrade.strike ? <span className="text-slate-600 mx-1">·</span> : null}
+                  {lastTrade.strike && <span>{lastTrade.strike}</span>}
+                </div>
+              )}
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-6 gap-3 font-mono text-sm">
+              <div>
+                <div className="text-slate-500 text-xs mb-0.5">Symbol</div>
+                <div className="text-white font-semibold">{lastTrade.symbol ?? '–'}</div>
+              </div>
+              <div>
+                <div className="text-slate-500 text-xs mb-0.5">Side (CE / PE)</div>
+                <div
+                  className={`text-xl font-bold ${
+                    lastClosedSide === 'CE' ? 'text-cyan-400' : lastClosedSide === 'PE' ? 'text-amber-400' : 'text-slate-500'
+                  }`}
+                >
+                  {lastClosedSide || '–'}
+                </div>
+              </div>
+              <div>
+                <div className="text-slate-500 text-xs mb-0.5">Result</div>
+                <div className={`font-semibold ${lastTradeResultClass(lastTrade.result)}`}>{lastTrade.result ?? '–'}</div>
+              </div>
+              <div>
+                <div className="text-slate-500 text-xs mb-0.5">Entry (prem)</div>
+                <div className="text-slate-200">{lastTrade.entry != null ? Number(lastTrade.entry).toFixed(2) : '–'}</div>
+              </div>
+              <div>
+                <div className="text-slate-500 text-xs mb-0.5">Exit (prem)</div>
+                <div className="text-slate-200">{lastTrade.exit != null ? Number(lastTrade.exit).toFixed(2) : '–'}</div>
+              </div>
+              <div>
+                <div className="text-slate-500 text-xs mb-0.5">PnL</div>
+                <div className={Number(lastTrade.pnl) >= 0 ? 'text-emerald-400 font-semibold' : 'text-red-400 font-semibold'}>
+                  {lastTrade.pnl != null ? Number(lastTrade.pnl).toFixed(2) : '–'}
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <p className="text-slate-500 text-sm">No closed paper trades yet — stats will appear after the first exit.</p>
+        )}
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-2 text-xs font-mono">
+        <div className="rounded border border-slate-700 p-2"><div className="text-slate-500">Trades</div><div className="text-slate-200">{stats.total_trades ?? 0}</div></div>
+        <div className="rounded border border-slate-700 p-2"><div className="text-slate-500">Wins</div><div className="text-emerald-400">{stats.wins ?? 0}</div></div>
+        <div className="rounded border border-slate-700 p-2"><div className="text-slate-500">Losses</div><div className="text-red-400">{stats.losses ?? 0}</div></div>
+        <div className="rounded border border-slate-700 p-2"><div className="text-slate-500">PnL</div><div className="text-slate-200">{stats.total_pnl != null ? Number(stats.total_pnl).toFixed(2) : '0.00'}</div></div>
+        <div className="rounded border border-slate-700 p-2"><div className="text-slate-500">Win rate</div><div className="text-cyan-300">{stats.win_rate != null ? `${Number(stats.win_rate).toFixed(1)}%` : '0.0%'}</div></div>
+        <div className="rounded border border-slate-700 p-2"><div className="text-slate-500">Health</div><div className="text-amber-300">{stats.system_health || 'WEAK'}</div></div>
+      </div>
+      {activeEntries.length > 0 ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {activeEntries.map(([sym, a]) => (
+            <div key={sym} className="rounded border border-slate-700 bg-slate-950/40 p-3 font-mono text-xs">
+              <div className="text-slate-300 mb-2 font-semibold text-sm">
+                {sym} <span className="text-cyan-400">{a.strike || [a.type].filter(Boolean).join(' ') || '–'}</span>
+              </div>
+              <div className="grid grid-cols-2 gap-y-1">
+                <span className="text-slate-500">Index spot</span>
+                <span className="text-amber-200">{a.index_price != null ? Number(a.index_price).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '–'}</span>
+                <span className="text-slate-500">Live prem (LTP)</span>
+                <span className="text-emerald-300">{a.last_prem != null ? Number(a.last_prem).toFixed(2) : '–'}</span>
+                <span className="text-slate-500">Entry</span><span className="text-slate-200">{a.entry ?? '–'}</span>
+                <span className="text-slate-500">Target</span><span className="text-emerald-400">{a.target ?? '–'}</span>
+                <span className="text-slate-500">SL</span><span className="text-red-400">{a.stoploss ?? '–'}</span>
+                <span className="text-slate-500">PnL live</span><span className="text-slate-200">{a.pnl_live != null ? Number(a.pnl_live).toFixed(2) : '–'}</span>
+                <span className="text-slate-500">PnL %</span><span className="text-slate-200">{a.pnl_percent != null ? `${Number(a.pnl_percent).toFixed(2)}%` : '–'}</span>
+                <span className="text-slate-500">Dist target</span><span className="text-slate-200">{a.distance_to_target != null ? Number(a.distance_to_target).toFixed(2) : '–'}</span>
+                <span className="text-slate-500">Dist SL</span><span className="text-slate-200">{a.distance_to_sl != null ? Number(a.distance_to_sl).toFixed(2) : '–'}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="text-slate-500 text-sm">No active paper trades</div>
+      )}
+      {Object.keys(guide).length > 0 && (
+        <div className="text-xs text-slate-500 border-t border-slate-700 pt-2">
+          {Object.entries(guide).map(([k, v]) => (
+            <div key={k}><span className="text-slate-400">{k}:</span> {v}</div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function getWsDecisionGuide(coverage = {}) {
   const ltp = Number(coverage.ltp_pct ?? 0)
   const oi = Number(coverage.oi_pct ?? 0)
@@ -668,6 +808,7 @@ export default function App() {
   const [stopHunts, setStopHunts] = useState({})
   const [finalSignal, setFinalSignal] = useState({})
   const [wsHealth, setWsHealth] = useState({})
+  const [paperTrades, setPaperTrades] = useState({})
   const symbolOrder = ['NIFTY', 'SENSEX']
   const signalEntries = Object.entries(signals || {})
   const hasFinalSignal = Object.keys(finalSignal || {}).length > 0
@@ -750,7 +891,7 @@ export default function App() {
 
   const load = async () => {
     try {
-      const [marketRes, signalsRes, chainRes, oiRes, regimeRes, liqRes, stopRes, finalRes, wsHealthRes] = await Promise.all([
+      const [marketRes, signalsRes, chainRes, oiRes, regimeRes, liqRes, stopRes, finalRes, wsHealthRes, paperRes] = await Promise.all([
         fetchMarket(),
         fetchSignals(),
         fetchOptionChain().catch(() => ({ NIFTY: {}, SENSEX: {} })),
@@ -760,6 +901,7 @@ export default function App() {
         fetchStopHunts().catch(() => ({ stop_hunts: {} })),
         fetchFinalSignal().catch(() => ({ final_signal: {} })),
         fetchWsHealth().catch(() => ({ ws_health: {} })),
+        fetchPaperTrades().catch(() => ({ paper_trades: {} })),
       ])
       setMarket(marketRes.market || {})
       setSignals(signalsRes.signals || {})
@@ -770,6 +912,7 @@ export default function App() {
       setStopHunts(stopRes.stop_hunts || {})
       setFinalSignal(finalRes.final_signal || {})
       setWsHealth(wsHealthRes?.ws_health || {})
+      setPaperTrades(paperRes?.paper_trades || {})
       setModelVersion(signalsRes.model_version || marketRes.model_version || null)
       setLastUpdate(new Date())
       setError(null)
@@ -816,7 +959,6 @@ export default function App() {
             {error} — Is the backend running on port 8001?
           </div>
         )}
-        <DashboardGuideTable />
 
         <section className="mb-8">
           <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Scalping signals</h2>
@@ -840,6 +982,13 @@ export default function App() {
           <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Placed orders (paper)</h2>
           <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-3">
             <PlacedOrders orders={orders} onExit={exitOrder} />
+          </div>
+        </section>
+
+        <section className="mb-8">
+          <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Paper trading simulator</h2>
+          <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-3">
+            <PaperTradesPanel paperTrades={paperTrades} />
           </div>
         </section>
 
@@ -1094,6 +1243,7 @@ export default function App() {
             </div>
           </section>
         )}
+        <DashboardGuideTable />
       </main>
     </div>
   )

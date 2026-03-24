@@ -117,7 +117,9 @@ def compute_fast_confidence(features: Dict[str, Any]) -> int:
     vol_strength = max(call_vol, put_vol)
     mom_norm = (mom + 1.0) / 2.0  # [-1,1] -> [0,1]
 
-    score = 0.4 * oi_strength + 0.3 * vol_strength + 0.3 * mom_norm
-    conf = int(round(max(0.0, min(1.0, score)) * 100))
+    score = max(0.0, min(1.0, 0.4 * oi_strength + 0.3 * vol_strength + 0.3 * mom_norm))
+    # Dynamic confidence band for live stability: map [0,1] -> [50,95].
+    conf = int(round(50.0 + score * 45.0))
+    conf = max(50, min(95, conf))
     return conf
 

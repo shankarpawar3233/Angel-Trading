@@ -71,3 +71,9 @@ export async function fetchWsHealth() {
   if (!res.ok) return { ws_health: {} };
   return res.json();
 }
+
+export async function fetchPaperTrades() {
+  const res = await fetch(`${API_BASE}/paper-trades`);
+  if (!res.ok) return { paper_trades: { active: {}, stats: {}, last_trade: null, guide: {} } };
+  return res.json();
+}
