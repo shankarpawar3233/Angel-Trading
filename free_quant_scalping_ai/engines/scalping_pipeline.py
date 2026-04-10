@@ -6,12 +6,16 @@ Does not change rule math: delegates to ``fast_features``, ``scalping_fast``, an
 
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, List, Optional
 
 from app.services import signal_engine
 from fast_features import compute_fast_features
 from hero_zero_fast import detect_hero_zero_fast
 from scalping_fast import compute_fast_confidence, generate_fast_scalping_signal, generate_ml_signal
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 def run_scalping_pipeline(
@@ -27,11 +31,20 @@ def run_scalping_pipeline(
 ) -> Dict[str, Any]:
     su = symbol.upper()
     features = compute_fast_features(chain_snapshot, float(price or 0.0), sym_hist)
-    rule_signal = generate_fast_scalping_signal(features)
-    ml_signal = generate_ml_signal(features)
+    vol_avail = bool(features.get("volume_available", True))
+    features["volume_fallback_used"] = su == "SENSEX" and not vol_avail
+    rule_signal = generate_fast_scalping_signal(features, su)
+    ml_signal = generate_ml_signal(features, su)
     scalping_signal = rule_signal
     hero_zero = detect_hero_zero_fast(chain_snapshot, float(price or 0.0))
     confidence = compute_fast_confidence(features)
+    if features.get("volume_fallback_used"):
+        try:
+            pen = int(os.getenv("SENSEX_VOLUME_CONF_PENALTY", "7"))
+        except ValueError:
+            pen = 7
+        pen = max(5, min(10, pen))
+        confidence = max(50, int(confidence) - pen)
     call_oi = float(features.get("call_oi_strength") or 0.0)
     put_oi = float(features.get("put_oi_strength") or 0.0)
     call_vol = float(features.get("call_volume_strength") or 0.0)
@@ -39,6 +52,13 @@ def run_scalping_pipeline(
     mom = float(features.get("price_momentum") or 0.0)
 
     debug: List[str] = []
+    if features.get("volume_fallback_used"):
+        debug.append("volume_fallback_used|true")
+        logger.debug(
+            "[SENSEX] volume_fallback_used=true volume_available=false signal=%s conf_after_penalty=%s",
+            rule_signal,
+            confidence,
+        )
     scalping_signal, confidence = signal_engine.merge_ml_fallback(scalping_signal, ml_signal, confidence)
     scalping_signal, confidence = signal_engine.sensex_premium_fallback(
         su, scalping_signal, chain_snapshot, price, features, confidence
@@ -72,6 +92,8 @@ def run_scalping_pipeline(
         "ml_signal": ml_signal,
         "hero_zero": hero_zero,
         "features": features,
+        "volume_available": vol_avail,
+        "volume_fallback_used": bool(features.get("volume_fallback_used")),
         "debug": debug,
         "call_oi": call_oi,
         "put_oi": put_oi,

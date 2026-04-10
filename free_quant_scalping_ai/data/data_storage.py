@@ -237,7 +237,20 @@ def store_regime(symbol: str, ts, regime: str, confidence: float | None, payload
 
 
 def store_signal(
-    symbol: str, ts, category: Literal["scalping", "hero_zero", "institutional", "gamma", "expiry", "combined", "regime", "final"], payload_json: str
+    symbol: str,
+    ts,
+    category: Literal[
+        "scalping",
+        "hero_zero",
+        "institutional",
+        "gamma",
+        "expiry",
+        "combined",
+        "regime",
+        "final",
+        "final_fast",
+    ],
+    payload_json: str,
 ) -> None:
     with get_connection() as conn:
         cursor = conn.cursor()

@@ -28,6 +28,7 @@ class ScalpingEngine(BaseEngine):
                 "stable_count": r.get("stable_count"),
                 "ml": r.get("ml_signal"),
             },
+            intent="SCALP",
         )
         append_engine_log(self.name, {"symbol": market_state.symbol, **out})
         return out

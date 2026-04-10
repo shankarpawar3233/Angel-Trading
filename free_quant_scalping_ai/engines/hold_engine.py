@@ -17,11 +17,11 @@ class HoldEngine(BaseEngine):
 
     def process_tick(self, market_state: MarketState):
         if not engine_enabled("hold"):
-            return self._out("NO_TRADE", 0.0, "engine_disabled", {"engine": self.name})
+            return self._out("NO_TRADE", 0.0, "engine_disabled", {"engine": self.name}, intent="HOLD")
         hist = market_state.price_history
         price = float(market_state.price or 0.0)
         if len(hist) < env_int("HOLD_MIN_HISTORY", 32) or price <= 0:
-            return self._out("NO_TRADE", 0.0, "insufficient_history", {})
+            return self._out("NO_TRADE", 0.0, "insufficient_history", {}, intent="HOLD")
 
         span = env_int("HOLD_EMA_SPAN", 24)
         ema_slice = hist[-max(span * 3, span + 2) :]
@@ -47,7 +47,7 @@ class HoldEngine(BaseEngine):
         bearish = (price < ema * (1.0 - eps)) and (price <= vwap_proxy) and (mom <= mom_dn)
 
         if not bullish and not bearish:
-            out = self._out("NO_TRADE", 45.0, "neutral_trend_vwap", {"ema": ema, "vwap_proxy": vwap_proxy, "mom": mom})
+            out = self._out("NO_TRADE", 45.0, "neutral_trend_vwap", {"ema": ema, "vwap_proxy": vwap_proxy, "mom": mom}, intent="HOLD")
             append_engine_log(self.name, {"symbol": market_state.symbol, **out})
             return out
 
@@ -60,6 +60,7 @@ class HoldEngine(BaseEngine):
                 40.0,
                 f"no_monotone_up_{need}b",
                 {"bullish": bullish, "bearish": bearish},
+                intent="HOLD",
             )
             append_engine_log(self.name, {"symbol": market_state.symbol, **out})
             return out
@@ -69,6 +70,7 @@ class HoldEngine(BaseEngine):
                 40.0,
                 f"no_monotone_dn_{need}b",
                 {"bullish": bullish, "bearish": bearish},
+                intent="HOLD",
             )
             append_engine_log(self.name, {"symbol": market_state.symbol, **out})
             return out
@@ -76,12 +78,12 @@ class HoldEngine(BaseEngine):
         streak = need
         if bullish and not bearish:
             conf = min(88.0, 55.0 + streak * 3.0 + min(15.0, abs(mom) * 8000.0))
-            out = self._out("BUY_CE", conf, "ema_vwap_mom_bullish", {"ema": ema, "mom": mom, "streak": streak})
+            out = self._out("BUY_CE", conf, "ema_vwap_mom_bullish", {"ema": ema, "mom": mom, "streak": streak}, intent="HOLD")
         elif bearish and not bullish:
             conf = min(88.0, 55.0 + streak * 3.0 + min(15.0, abs(mom) * 8000.0))
-            out = self._out("BUY_PE", conf, "ema_vwap_mom_bearish", {"ema": ema, "mom": mom, "streak": streak})
+            out = self._out("BUY_PE", conf, "ema_vwap_mom_bearish", {"ema": ema, "mom": mom, "streak": streak}, intent="HOLD")
         else:
-            out = self._out("NO_TRADE", 42.0, "conflicting_bias", {})
+            out = self._out("NO_TRADE", 42.0, "conflicting_bias", {}, intent="HOLD")
 
         _ = compute_atm_strike(market_state.chain, price)
         append_engine_log(self.name, {"symbol": market_state.symbol, **out})

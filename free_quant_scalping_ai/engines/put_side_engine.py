@@ -12,10 +12,13 @@ class PutSideEngine(BaseEngine):
 
     def process_tick(self, market_state: MarketState):
         if not engine_enabled("put_side"):
-            return self._out("NO_TRADE", 0.0, "engine_disabled", {"engine": self.name})
+            return self._out("NO_TRADE", 0.0, "engine_disabled", {"engine": self.name}, intent="BREAKOUT")
         r = market_state.scalping_pipeline_result
         if not r:
-            return self._out("NO_TRADE", 0.0, "no_features", {})
+            return self._out("NO_TRADE", 0.0, "no_features", {}, intent="BREAKOUT")
+        su = str(market_state.underlying or market_state.symbol or "").upper()
+        feats = r.get("features") if isinstance(r.get("features"), dict) else {}
+        sensex_no_vol = su == "SENSEX" and not bool(feats.get("volume_available", True))
         poi = float(r.get("put_oi") or 0.0)
         pvol = float(r.get("put_vol") or 0.0)
         pcr = float(market_state.oi_snap.get("pcr") or 0.0)
@@ -25,7 +28,13 @@ class PutSideEngine(BaseEngine):
         )
         vol_spike = pe_v >= ce_v * env_float("PUT_SIDE_VOL_RATIO", 1.25) and pe_v > 0
         oi_bias = poi >= env_float("PUT_SIDE_OI_MIN", 0.42)
-        vol_bias = pvol >= env_float("PUT_SIDE_VOL_STRENGTH_MIN", 0.48)
+        vol_min = env_float("PUT_SIDE_VOL_STRENGTH_MIN", 0.48)
+        vol_bias = pvol >= vol_min or sensex_no_vol
+        if sensex_no_vol and ce_v <= 0 and pe_v <= 0:
+            spread = float(feats.get("spread_skew") or 0.0)
+            chg_ce = float(feats.get("call_oi_change_strength") or 0.0)
+            chg_pe = float(feats.get("put_oi_change_strength") or 0.0)
+            vol_spike = oi_bias and (spread <= -0.02 or chg_pe >= chg_ce + 0.05 or chg_pe >= 0.28)
         pcr_ok = pcr >= env_float("PUT_SIDE_PCR_MIN", 0.95) if pcr > 0 else True
 
         if oi_bias and vol_bias and vol_spike and pcr_ok:
@@ -37,14 +46,29 @@ class PutSideEngine(BaseEngine):
                 "BUY_PE",
                 conf,
                 "pe_oi_vol_cluster_bearish",
-                {"put_oi": poi, "put_vol": pvol, "pcr": pcr, "ce_chain_vol": ce_v, "pe_chain_vol": pe_v},
+                {
+                    "put_oi": poi,
+                    "put_vol": pvol,
+                    "pcr": pcr,
+                    "ce_chain_vol": ce_v,
+                    "pe_chain_vol": pe_v,
+                    "sensex_volume_fallback": sensex_no_vol,
+                },
+                intent="BREAKOUT",
             )
         else:
             out = self._out(
                 "NO_TRADE",
                 38.0,
                 "pe_edge_weak",
-                {"put_oi": poi, "put_vol": pvol, "pcr": pcr, "vol_spike": vol_spike},
+                {
+                    "put_oi": poi,
+                    "put_vol": pvol,
+                    "pcr": pcr,
+                    "vol_spike": vol_spike,
+                    "sensex_volume_fallback": sensex_no_vol,
+                },
+                intent="BREAKOUT",
             )
         append_engine_log(self.name, {"symbol": market_state.symbol, **out})
         return out

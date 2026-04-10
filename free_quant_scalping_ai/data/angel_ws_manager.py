@@ -12,11 +12,25 @@ import json
 import os
 import threading
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+_WS_HEALTH_FILE = Path(__file__).resolve().parents[1] / "logs" / "websocket_health.log"
+_WS_VERBOSE = os.getenv("ANGEL_WS_VERBOSE", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _append_ws_health_line(msg: str) -> None:
+    try:
+        _WS_HEALTH_FILE.parent.mkdir(parents=True, exist_ok=True)
+        line = f"{time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime())}Z {msg}\n"
+        with _WS_HEALTH_FILE.open("a", encoding="utf-8") as f:
+            f.write(line)
+    except OSError:
+        pass
 
 # Exchange types (Angel SmartWebSocketV2)
 EX_NSE_CM = 1
@@ -201,11 +215,8 @@ def _on_data(_wsapp: Any, message: Any) -> None:
                     }
                     option_chain_cache[under][sk][opt_type] = leg
                     _chain_update_prints += 1
-                    if _chain_update_prints <= 30 or _chain_update_prints % 80 == 0:
-                        try:
-                            print("[CHAIN UPDATE]", under, sk, opt_type, leg.get("ltp"))
-                        except Exception:
-                            pass
+                    if _WS_VERBOSE and (_chain_update_prints <= 30 or _chain_update_prints % 200 == 0):
+                        logger.debug("[CHAIN UPDATE] %s %s %s ltp=%s", under, sk, opt_type, leg.get("ltp"))
                 elif sym is None:
                     # Option-like tick but token not in token_to_strike (or not CE/PE)
                     if ltp is not None:
@@ -400,6 +411,7 @@ def _run_ws_loop() -> None:
             _sws = SmartWebSocketV2(auth_token, api_key, client_code, feed_token)
             def on_open(_wsapp: Any) -> None:
                 print("[WS CONNECTED]")
+                _append_ws_health_line("CONNECT index+NFO subscription started")
                 cid = 0
 
                 def _corrid() -> str:
@@ -465,6 +477,7 @@ def _run_ws_loop() -> None:
             def on_error(_wsapp: Any, error: Any) -> None:
                 print("[WS ERROR]", error)
                 logger.error("[WS] error: %s", error)
+                _append_ws_health_line(f"ERROR {error!s}")
                 try:
                     if _sws is not None and hasattr(_sws, "close_connection"):
                         _sws.close_connection()
@@ -474,6 +487,7 @@ def _run_ws_loop() -> None:
             def on_close(_wsapp: Any) -> None:
                 print("[WS CLOSED] reconnecting in %.0fs" % _reconnect_interval)
                 logger.info("[WS] closed; reconnect in %s", _reconnect_interval)
+                _append_ws_health_line(f"CLOSE reconnect_in={_reconnect_interval}s")
 
             _sws.on_data = _on_data
             _sws.on_open = on_open
@@ -496,7 +510,9 @@ def _heartbeat_loop() -> None:
             with _lock:
                 stale = (now - _last_index_tick) > _stale_index_seconds
             if stale and _running and _last_index_tick > 0:
-                print("[WS DEAD] index stale %.0fs — reconnect" % (now - _last_index_tick))
+                age = now - _last_index_tick
+                print("[WS DEAD] index stale %.0fs — reconnect" % age)
+                _append_ws_health_line(f"STALE_INDEX age_sec={age:.0f} forcing_reconnect")
                 try:
                     if _sws is not None and hasattr(_sws, "close_connection"):
                         _sws.close_connection()
@@ -574,6 +590,19 @@ def stop_angel_ws_manager() -> None:
         except Exception:
             pass
         _sws = None
+
+
+def get_feed_health() -> Dict[str, Any]:
+    """Age of last index tick and last any tick (for staleness gates in the API)."""
+    now = time.time()
+    with _lock:
+        idx_age = (now - _last_index_tick) if _last_index_tick else None
+        any_age = (now - _last_any_tick) if _last_any_tick else None
+        return {
+            "last_index_tick_age_sec": round(idx_age, 2) if idx_age is not None else None,
+            "last_any_tick_age_sec": round(any_age, 2) if any_age is not None else None,
+            "index_stale": bool(idx_age is not None and idx_age > _stale_index_seconds),
+        }
 
 
 def get_ws_price(symbol: str) -> Optional[float]:

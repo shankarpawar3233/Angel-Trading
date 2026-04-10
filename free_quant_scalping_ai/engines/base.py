@@ -30,10 +30,12 @@ class BaseEngine(ABC):
         confidence: float,
         reason: str,
         metadata: Dict[str, Any] | None = None,
+        intent: str = "SCALP",
     ) -> EngineOutput:
         return {
             "signal": signal,
             "confidence": float(confidence),
             "reason": reason,
+            "intent": intent,
             "metadata": metadata or {},
         }

@@ -36,32 +36,54 @@ def _fake_chain():
     }
 
 
+def _hist_trending():
+    return [24000.0 + i * 2.2 for i in range(70)]
+
+
+def _hist_sideways():
+    base = 24000.0
+    return [base + (4 if i % 2 == 0 else -4) + (i % 5) for i in range(70)]
+
+
+def _hist_expiry_volatile():
+    base = 24000.0
+    return [base + ((i % 7) - 3) * 8 + i * 0.4 for i in range(70)]
+
+
 def test_smoke():
     from engines.platform_runner import run_engine_tick
 
     st: dict = {"market": {"NIFTY": {"last_price": 24005.0}}, "_decision_state": {}, "_side_balance": {}}
     chain = _fake_chain()
-    hist = [24000.0 + i * 1.5 for i in range(50)]
-    oi_snap = {"pcr": 0.92, "ce_oi_total": 2.1e6, "pe_oi_total": 2.0e6}
-    t0 = time.perf_counter()
-    r = run_engine_tick(
-        st,
-        symbol="NIFTY",
-        price=24075.0,
-        chain_snapshot=chain,
-        sym_hist=hist,
-        oi_snap=oi_snap,
-    )
-    dt_ms = (time.perf_counter() - t0) * 1000.0
-    assert "engines" in r and "aggregate" in r and "scalping_pipeline" in r
-    for name in ("scalping", "hold", "call_side", "put_side", "hero_zero"):
-        assert name in r["engines"], f"missing engine {name}"
-        o = r["engines"][name]
-        assert "signal" in o and "confidence" in o and "reason" in o and "metadata" in o
-    agg = r["aggregate"]
-    assert agg["signal"] in ("BUY_CE", "BUY_PE", "NO_TRADE")
-    assert "risk" in r
-    print("OK smoke test: aggregate=", agg["signal"], "conf=", agg.get("confidence"), f"dt={dt_ms:.2f}ms")
+    scenarios = [
+        ("TRENDING", _hist_trending(), {"pcr": 0.90, "ce_oi_total": 2.3e6, "pe_oi_total": 2.0e6}),
+        ("RANGING", _hist_sideways(), {"pcr": 1.02, "ce_oi_total": 2.1e6, "pe_oi_total": 2.1e6}),
+        ("EXPIRY", _hist_expiry_volatile(), {"pcr": 0.98, "ce_oi_total": 2.0e6, "pe_oi_total": 2.2e6}),
+    ]
+    for name, hist, oi_snap in scenarios:
+        t0 = time.perf_counter()
+        r = run_engine_tick(
+            st,
+            symbol="NIFTY",
+            price=24075.0,
+            chain_snapshot=chain,
+            sym_hist=hist,
+            oi_snap=oi_snap,
+        )
+        dt_ms = (time.perf_counter() - t0) * 1000.0
+        assert "engines" in r and "aggregate" in r and "scalping_pipeline" in r and "regime" in r
+        for en in ("scalping", "hold", "call_side", "put_side", "hero_zero", "support_resistance"):
+            assert en in r["engines"], f"missing engine {en}"
+            o = r["engines"][en]
+            assert "signal" in o and "confidence" in o and "reason" in o and "metadata" in o and "intent" in o
+        agg = r["aggregate"]
+        assert agg["signal"] in ("BUY_CE", "BUY_PE", "NO_TRADE")
+        assert agg.get("intent") in ("SCALP", "HOLD", "REVERSAL", "BREAKOUT", "LOTTERY")
+        assert "risk" in r and "support_resistance" in r
+        print(
+            f"OK {name}: regime={r['regime'].get('regime')} aggregate={agg['signal']} "
+            f"intent={agg.get('intent')} conf={agg.get('confidence')} dt={dt_ms:.2f}ms"
+        )
 
 
 if __name__ == "__main__":

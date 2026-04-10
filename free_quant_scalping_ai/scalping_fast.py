@@ -14,60 +14,111 @@ from utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-def generate_fast_scalping_signal(features: Dict[str, Any]) -> str:
+def generate_fast_scalping_signal(features: Dict[str, Any], symbol: str = "NIFTY") -> str:
     """
     Simple deterministic rules:
       - BUY_CE: strong call OI + volume + positive momentum
       - BUY_PE: strong put OI + volume + negative momentum
+      - SENSEX: when chain volume is missing/zero, do not block — use OI strength,
+        OI-change concentration, momentum, and ATM spread skew instead of volume gates.
       - otherwise: NO_TRADE
     """
+    su = str(symbol or "NIFTY").upper()
     call_oi = float(features.get("call_oi_strength") or 0.0)
     put_oi = float(features.get("put_oi_strength") or 0.0)
     call_vol = float(features.get("call_volume_strength") or 0.0)
     put_vol = float(features.get("put_volume_strength") or 0.0)
     mom = float(features.get("price_momentum") or 0.0)
 
-    # Slightly relaxed thresholds for live feeds where OI may be sparse.
-    CALL_THRESH = 0.45
-    PUT_THRESH = 0.45
-    VOL_THRESH = 0.50
-    MOM_UP = 0.0002   # 2 bps
-    MOM_DOWN = -0.0002
+    # Tuned for live WS: OI updates can lag; allow softer OI/vol gates with clearer mom.
+    CALL_THRESH = 0.38
+    PUT_THRESH = 0.38
+    VOL_THRESH = 0.42
+    MOM_UP = 0.00008
+    MOM_DOWN = -0.00008
+    # SENSEX no-volume: OI change / spread substitutes (aligned with WS gaps on BFO).
+    CHG_THRESH = 0.30
+    SPREAD_CE = 0.025
+    SPREAD_PE = -0.025
+    OI_RELAX = 0.30
 
-    oi_available = (call_oi > 0.0) or (put_oi > 0.0)
-    if oi_available:
-        buy_ce = call_oi >= CALL_THRESH and call_vol >= VOL_THRESH and mom >= MOM_UP
-        buy_pe = put_oi >= PUT_THRESH and put_vol >= VOL_THRESH and mom <= MOM_DOWN
+    vol_available = bool(features.get("volume_available", True))
+
+    if su == "SENSEX" and not vol_available:
+        oi_chg_ce = float(features.get("call_oi_change_strength") or 0.0)
+        oi_chg_pe = float(features.get("put_oi_change_strength") or 0.0)
+        spread = float(features.get("spread_skew") or 0.0)
+        buy_ce = mom >= MOM_UP and (
+            call_oi >= CALL_THRESH
+            or (
+                oi_chg_ce >= CHG_THRESH
+                and oi_chg_ce >= oi_chg_pe - 0.02
+                and call_oi >= OI_RELAX
+            )
+            or (spread >= SPREAD_CE and call_oi >= OI_RELAX)
+        )
+        buy_pe = mom <= MOM_DOWN and (
+            put_oi >= PUT_THRESH
+            or (
+                oi_chg_pe >= CHG_THRESH
+                and oi_chg_pe >= oi_chg_ce - 0.02
+                and put_oi >= OI_RELAX
+            )
+            or (spread <= SPREAD_PE and put_oi >= OI_RELAX)
+        )
+        if buy_ce or buy_pe:
+            logger.debug(
+                "[FAST SIGNAL SENSEX vol_fallback] BUY_CE=%s BUY_PE=%s coi=%.2f poi=%.2f chg_ce=%.2f chg_pe=%.2f spread=%.4f mom=%.5f",
+                buy_ce,
+                buy_pe,
+                call_oi,
+                put_oi,
+                oi_chg_ce,
+                oi_chg_pe,
+                spread,
+                mom,
+            )
     else:
-        # Fallback when OI is unavailable: rely on volume imbalance + momentum.
-        buy_ce = call_vol >= 0.60 and call_vol > put_vol and mom >= MOM_UP
-        buy_pe = put_vol >= 0.60 and put_vol > call_vol and mom <= MOM_DOWN
+        oi_available = (call_oi > 0.0) or (put_oi > 0.0)
+        if oi_available:
+            buy_ce = call_oi >= CALL_THRESH and call_vol >= VOL_THRESH and mom >= MOM_UP
+            buy_pe = put_oi >= PUT_THRESH and put_vol >= VOL_THRESH and mom <= MOM_DOWN
+        else:
+            buy_ce = call_vol >= 0.52 and call_vol > put_vol and mom >= MOM_UP
+            buy_pe = put_vol >= 0.52 and put_vol > call_vol and mom <= MOM_DOWN
 
     # Avoid conflicting signals (both sides active)
     if buy_ce and buy_pe:
         return "NO_TRADE"
     if buy_ce:
-        logger.info("[FAST SIGNAL] BUY_CE (call_oi=%.2f call_vol=%.2f mom=%.4f)", call_oi, call_vol, mom)
+        logger.debug("[FAST SIGNAL] BUY_CE (call_oi=%.2f call_vol=%.2f mom=%.5f)", call_oi, call_vol, mom)
         return "BUY_CE"
     if buy_pe:
-        logger.info("[FAST SIGNAL] BUY_PE (put_oi=%.2f put_vol=%.2f mom=%.4f)", put_oi, put_vol, mom)
+        logger.debug("[FAST SIGNAL] BUY_PE (put_oi=%.2f put_vol=%.2f mom=%.5f)", put_oi, put_vol, mom)
         return "BUY_PE"
     return "NO_TRADE"
 
 
-def generate_ml_signal(features: Dict[str, Any]) -> Dict[str, Any]:
+def generate_ml_signal(features: Dict[str, Any], symbol: str = "NIFTY") -> Dict[str, Any]:
     """
     Ultra-light ML-style scorer (constant-time): combines OI, volume and momentum
     into CE/PE directional probabilities. No blocking or model I/O.
     """
+    su = str(symbol or "NIFTY").upper()
     call_oi = float(features.get("call_oi_strength") or 0.0)
     put_oi = float(features.get("put_oi_strength") or 0.0)
     call_vol = float(features.get("call_volume_strength") or 0.0)
     put_vol = float(features.get("put_volume_strength") or 0.0)
     mom = float(features.get("price_momentum") or 0.0)
+    o_chg_ce = float(features.get("call_oi_change_strength") or 0.0)
+    o_chg_pe = float(features.get("put_oi_change_strength") or 0.0)
+    vol_avail = bool(features.get("volume_available", True))
 
     # Linear logits (cheap) then sigmoid.
-    z_ce = 1.8 * (call_oi - put_oi) + 1.3 * (call_vol - put_vol) + 4.5 * mom
+    if su == "SENSEX" and not vol_avail:
+        z_ce = 1.8 * (call_oi - put_oi) + 0.9 * (o_chg_ce - o_chg_pe) + 4.5 * mom
+    else:
+        z_ce = 1.8 * (call_oi - put_oi) + 1.3 * (call_vol - put_vol) + 4.5 * mom
     z_pe = -z_ce
 
     def _sigmoid(x: float) -> float:
@@ -87,7 +138,7 @@ def generate_ml_signal(features: Dict[str, Any]) -> Dict[str, Any]:
 
     confidence = int(round(p * 100))
     # Require a floor so ML fallback does not overtrade noise.
-    if confidence < 58:
+    if confidence < 55:
         label = "NO_TRADE"
 
     return {

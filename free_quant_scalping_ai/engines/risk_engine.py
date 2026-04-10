@@ -65,6 +65,7 @@ def evaluate_risk(
 
     report = {
         "blocked": blocked,
+        "passed": not blocked,
         "reasons": reasons,
         "cooldown_sec": cooldown,
         "max_per_minute": max_per_min,

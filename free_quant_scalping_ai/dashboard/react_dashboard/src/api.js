@@ -77,3 +77,16 @@ export async function fetchPaperTrades() {
   if (!res.ok) return { paper_trades: { active: {}, stats: {}, last_trade: null, guide: {} } };
   return res.json();
 }
+
+export async function resetPaperTrades() {
+  const res = await fetch(`${API_BASE}/paper-trades/reset`, { method: 'POST' });
+  if (!res.ok) throw new Error('Paper trades reset failed');
+  return res.json();
+}
+
+/** Multi-engine platform: per-engine signal/confidence/reason/intent per symbol */
+export async function fetchEngines() {
+  const res = await fetch(`${API_BASE}/engines`);
+  if (!res.ok) return { engine_platform: {} };
+  return res.json();
+}

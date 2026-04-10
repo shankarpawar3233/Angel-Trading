@@ -1,613 +1,387 @@
 """
-Paper trading simulator: read-only sidecar. No broker, no impact on signal path.
+Aggregate-gated paper trading: opens only when platform aggregate + risk allow,
+logs to logs/paper_trades.jsonl, exposes active / stats for the dashboard API.
 """
+
 from __future__ import annotations
 
 import json
+import os
 import time
-from datetime import datetime, timezone
+import uuid
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
-# Per-underlying lot size (exchange); total contracts = lot_size * NO_OF_LOTS
-_LOT_SIZE_BY_SYMBOL = {"NIFTY": 65, "SENSEX": 20}
-NO_OF_LOTS = 20
+from app.services import option_chain_service
+from utils.logger import get_logger
 
-_PAPER_LOG = Path("logs/paper_trades.jsonl")
-_active: Dict[str, Dict[str, Any]] = {}
-_stats: Dict[str, Any] = {
-    "total_trades": 0,
-    "wins": 0,
-    "losses": 0,
-    "total_pnl": 0.0,
-    "total_profit": 0.0,
-    "total_loss": 0.0,
-    "total_duration": 0.0,
-    "max_profit": 0.0,
-    "max_loss": 0.0,
-    "current_streak_count": 0,
-    "current_streak_type": None,
-    "best_streak": 0,
-}
-_last_trade: Optional[Dict[str, Any]] = None
-_last_exit_ts: Dict[str, float] = {}
-_entry_ts: Dict[str, list[float]] = {}
+logger = get_logger(__name__)
 
-_DASHBOARD_GUIDE: Dict[str, str] = {
-    "active": "Live running trades with real-time PnL",
-    "pnl_live": "Current profit/loss based on option premium",
-    "win_rate": "Winning trades percentage",
-    "risk_reward": "Average profit vs average loss",
-    "system_health": "Overall strategy strength",
-    "distance_to_target": "Remaining move to hit target",
-    "distance_to_sl": "Buffer before stoploss hit",
-}
-
-# O(1) re-entry memory when flat: two prior spots / premiums for direction + momentum
-_flat_hist: Dict[str, Dict[str, Tuple[Optional[float], Optional[float]]]] = {}
+_PAPER_LOG = Path(os.getenv("PAPER_TRADES_LOG", "logs/paper_trades.jsonl"))
 
 
-def _quantity_for(symbol: str) -> int:
-    u = symbol.upper()
-    lot = _LOT_SIZE_BY_SYMBOL.get(u, _LOT_SIZE_BY_SYMBOL["NIFTY"])
-    return int(lot * NO_OF_LOTS)
+def _utc_now_iso() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat()
+_MIN_AGG_CONF = float(os.getenv("PAPER_AGG_MIN_CONF", "65"))
+_BOOTSTRAP_KEY = "_paper_trades_bootstrapped"
 
 
-def _lots_for_confidence(conf: float) -> int:
-    if conf >= 90:
-        return 25
-    if conf >= 85:
-        return 15
-    return 8
-
-
-def _build_dashboard_stats() -> Dict[str, Any]:
-    """O(1) derived metrics from stored counters only."""
-    tt = int(_stats["total_trades"])
-    w = int(_stats["wins"])
-    l = int(_stats["losses"])
-    tprof = float(_stats["total_profit"])
-    tloss = float(_stats["total_loss"])
-    win_rate = (w / tt) * 100.0 if tt > 0 else 0.0
-    avg_profit = tprof / w if w > 0 else 0.0
-    avg_loss = tloss / l if l > 0 else 0.0
-    risk_reward = abs(avg_profit / avg_loss) if avg_loss != 0 else 0.0
-    if win_rate >= 60.0:
-        health = "STRONG"
-    elif win_rate >= 45.0:
-        health = "MODERATE"
-    else:
-        health = "WEAK"
+def _default_paper_state() -> Dict[str, Any]:
     return {
-        "total_trades": tt,
-        "wins": w,
-        "losses": l,
-        "total_pnl": float(_stats["total_pnl"]),
-        "total_profit": tprof,
-        "total_loss": tloss,
-        "win_rate": win_rate,
-        "avg_profit": avg_profit,
-        "avg_loss": avg_loss,
-        "risk_reward": risk_reward,
-        "system_health": health,
+        "active": {},
+        "stats": {
+            "total_trades": 0,
+            "wins": 0,
+            "losses": 0,
+            "total_pnl": 0.0,
+            "win_rate": 0.0,
+        },
+        "last_trade": None,
+        "guide": {
+            "entry": "Open when aggregate.signal is BUY_CE/BUY_PE, confidence >= 65, risk.passed (not blocked).",
+            "exit": "Target hit or stop-loss hit.",
+            "log": str(_PAPER_LOG),
+        },
     }
 
 
-def _build_dashboard_insights() -> Dict[str, Any]:
-    """O(1) insights from incrementally maintained counters only."""
-    tt = int(_stats["total_trades"])
-    w = int(_stats["wins"])
-    tloss = float(_stats["total_loss"])
-    tprof = float(_stats["total_profit"])
-    total_duration = float(_stats.get("total_duration", 0.0))
-    avg_duration = (total_duration / tt) if tt > 0 else 0.0
-    profit_factor = (tprof / abs(tloss)) if tloss != 0 else 0.0
-    win_rate = (w / tt) * 100.0 if tt > 0 else 0.0
-    ctype = _stats.get("current_streak_type")
-    ccount = int(_stats.get("current_streak_count") or 0)
-    return {
-        "win_rate": win_rate,
-        "profit_factor": profit_factor,
-        "avg_duration": avg_duration,
-        "max_profit_trade": float(_stats.get("max_profit", 0.0)),
-        "max_loss_trade": float(_stats.get("max_loss", 0.0)),
-        "current_streak": {"type": ctype, "count": ccount},
-        "best_streak": int(_stats.get("best_streak", 0)),
-    }
+def _risk_passed(risk: Any) -> bool:
+    if not isinstance(risk, dict):
+        return False
+    if "passed" in risk:
+        return bool(risk.get("passed"))
+    return not bool(risk.get("blocked"))
 
 
-def get_paper_stats() -> Dict[str, Any]:
-    """Read-only snapshot for dashboards / debugging."""
-    return {"stats": _build_dashboard_stats(), "insights": _build_dashboard_insights()}
-
-
-def _strike_key_side(strike_label: Any) -> tuple[Optional[str], Optional[str]]:
-    if not strike_label or not isinstance(strike_label, str):
-        return None, None
-    parts = strike_label.strip().split()
-    if len(parts) < 2:
-        return None, None
-    return parts[0], parts[1].upper()
-
-
-def _ltp(chain: Any, strike_key: str, side: str) -> Optional[float]:
+def _leg_ltp(chain: Any, strike: float, opt: str) -> float:
     if not chain or not isinstance(chain, dict):
-        return None
-    row = chain.get(strike_key)
-    if not isinstance(row, dict):
-        return None
-    leg = row.get(side)
-    if not isinstance(leg, dict):
-        return None
-    raw = leg.get("ltp")
-    if raw is None:
-        return None
-    try:
-        return float(raw)
-    except (TypeError, ValueError):
-        return None
+        return 0.0
+    for key in (str(int(round(strike))), str(round(strike, 2)), str(strike)):
+        row = chain.get(key)
+        if not isinstance(row, dict):
+            continue
+        leg = row.get(opt)
+        if isinstance(leg, dict):
+            p = option_chain_service.option_leg_last_price(leg)
+            return float(p or 0.0)
+    return 0.0
 
 
-def _append_closed(row: Dict[str, Any]) -> None:
+def _append_jsonl(row: Dict[str, Any]) -> None:
     try:
         _PAPER_LOG.parent.mkdir(parents=True, exist_ok=True)
         with _PAPER_LOG.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(row, default=str, ensure_ascii=True) + "\n")
-    except Exception:
-        pass
+            f.write(json.dumps(row, ensure_ascii=False, default=str) + "\n")
+    except OSError as exc:
+        logger.warning("paper_trades jsonl append failed: %s", exc)
 
 
-def _update_flat_hist(symbol: str, spot: Optional[float], prem: Optional[float]) -> None:
-    h = _flat_hist.setdefault(symbol, {"spot": (None, None), "prem": (None, None)})
-    s0, s1 = h["spot"]
-    h["spot"] = (s1, spot)
-    p0, p1 = h["prem"]
-    h["prem"] = (p1, prem)
+def _recompute_win_rate(stats: Dict[str, Any]) -> None:
+    n = int(stats.get("total_trades") or 0)
+    stats["win_rate"] = round(100.0 * float(stats.get("wins") or 0) / n, 2) if n else 0.0
 
 
-def _reentry_ok(symbol: str, ed: str, spot: Optional[float], prem: Optional[float]) -> bool:
-    if spot is None or prem is None:
-        return True
-    h = _flat_hist.get(symbol)
-    if not h:
-        return True
-    s0, s1 = h["spot"]
-    p0, p1 = h["prem"]
-    if s0 is None or s1 is None or p0 is None or p1 is None:
-        return True
-    if ed == "BUY_CE":
-        if not (spot > s1 > s0):
-            return False
-    elif ed == "BUY_PE":
-        if not (spot < s1 < s0):
-            return False
-    return prem > p1 > p0
+def _system_health(stats: Dict[str, Any]) -> str:
+    n = int(stats.get("total_trades") or 0)
+    if n == 0:
+        return "IDLE"
+    if n < 5:
+        return "WARMING_UP"
+    wr = float(stats.get("win_rate") or 0.0)
+    return "OK" if wr >= 40.0 else "WEAK"
+
+
+def bootstrap(state: Dict[str, Any]) -> None:
+    """Load cumulative stats from JSONL once (active positions stay empty)."""
+    if state.get(_BOOTSTRAP_KEY):
+        return
+    state[_BOOTSTRAP_KEY] = True
+    base = _default_paper_state()
+    if not _PAPER_LOG.is_file():
+        state["paper_trades"] = base
+        return
+    wins = losses = 0
+    total_pnl = 0.0
+    closes = 0
+    try:
+        with _PAPER_LOG.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if row.get("event") != "close":
+                    continue
+                closes += 1
+                pnl = float(row.get("pnl") or 0.0)
+                total_pnl += pnl
+                if pnl > 0:
+                    wins += 1
+                elif pnl < 0:
+                    losses += 1
+    except OSError as exc:
+        logger.warning("paper_trades bootstrap read failed: %s", exc)
+        state["paper_trades"] = base
+        return
+    base["stats"].update(
+        {
+            "total_trades": closes,
+            "wins": wins,
+            "losses": losses,
+            "total_pnl": round(total_pnl, 4),
+        }
+    )
+    _recompute_win_rate(base["stats"])
+    base["stats"]["system_health"] = _system_health(base["stats"])
+    state["paper_trades"] = base
+    logger.info(
+        "[PAPER] Bootstrapped stats from %s: trades=%s pnl=%.2f win_rate=%s%%",
+        _PAPER_LOG,
+        closes,
+        total_pnl,
+        base["stats"]["win_rate"],
+    )
+
+
+def reset_paper_trades(state: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Wipe the JSONL log and in-memory paper state (active, stats, last_trade).
+    Clears bootstrap so the next bootstrap() reloads from the now-empty file.
+    """
+    try:
+        _PAPER_LOG.parent.mkdir(parents=True, exist_ok=True)
+        _PAPER_LOG.write_text("", encoding="utf-8")
+    except OSError as exc:
+        logger.warning("[PAPER] reset: could not truncate %s: %s", _PAPER_LOG, exc)
+    state[_BOOTSTRAP_KEY] = False
+    state["paper_trades"] = _default_paper_state()
+    bootstrap(state)
+    logger.info("[PAPER] Reset complete; log cleared at %s", _PAPER_LOG)
+    return state.get("paper_trades") or _default_paper_state()
 
 
 def _close_trade(
+    state: Dict[str, Any],
     symbol: str,
-    active: Dict[str, Any],
-    exit_px: float,
-    result: str,
+    pos: Dict[str, Any],
+    exit_prem: float,
+    reason: str,
+    index_price: float,
+    aggregate_signal: str,
 ) -> None:
-    entry_px = float(active["entry"])
-    qty = int(active["quantity"])
-    pnl = (exit_px - entry_px) * qty
-    exit_time = datetime.now(timezone.utc).isoformat()
-    entry_time = active.get("entry_time")
-    duration_sec: Optional[float] = None
-    if isinstance(entry_time, str):
-        try:
-            et = datetime.fromisoformat(entry_time)
-            xt = datetime.fromisoformat(exit_time)
-            duration_sec = max(0.0, (xt - et).total_seconds())
-        except Exception:
-            duration_sec = None
-    _stats["total_trades"] += 1
-    if result == "FULL_TARGET":
-        _stats["wins"] += 1
-    elif result == "TRAIL_EXIT":
-        if pnl > 0:
-            _stats["wins"] += 1
-        else:
-            _stats["losses"] += 1
+    pt = state.setdefault("paper_trades", _default_paper_state())
+    entry = float(pos.get("entry") or 0.0)
+    pnl = round(exit_prem - entry, 4)
+    sig = str(pos.get("signal") or "")
+    if reason == "TARGET":
+        result = "FULL_TARGET"
+    elif reason == "SL":
+        result = "LOSS"
+    elif reason == "REVERSE":
+        result = "REVERSAL"
     else:
-        _stats["losses"] += 1
-    _stats["total_pnl"] += pnl
-    if pnl > 0:
-        _stats["total_profit"] += pnl
-    elif pnl < 0:
-        _stats["total_loss"] += -pnl
-    if duration_sec is not None:
-        _stats["total_duration"] += float(duration_sec)
-    _stats["max_profit"] = max(float(_stats.get("max_profit", 0.0)), pnl)
-    _stats["max_loss"] = min(float(_stats.get("max_loss", 0.0)), pnl)
-    outcome = "WIN" if pnl > 0 else "LOSS"
-    if _stats.get("current_streak_type") == outcome:
-        _stats["current_streak_count"] = int(_stats.get("current_streak_count") or 0) + 1
-    else:
-        _stats["current_streak_type"] = outcome
-        _stats["current_streak_count"] = 1
-    if outcome == "WIN":
-        _stats["best_streak"] = max(int(_stats.get("best_streak") or 0), int(_stats["current_streak_count"]))
-    leg_strike = active.get("strike")
-    leg_type = (active.get("type") or "").upper() or None
-    sk = active.get("strike_key")
-    # Human-readable leg: always prefer explicit strike key + CE/PE so UI never misses side.
-    if sk and leg_type in ("CE", "PE"):
-        leg_display = f"{symbol} {sk} {leg_type}"
-    elif leg_strike:
-        leg_display = f"{symbol} {leg_strike}"
-        if leg_type in ("CE", "PE") and leg_type not in str(leg_strike).upper():
-            leg_display = f"{leg_display} {leg_type}"
-    elif leg_type in ("CE", "PE"):
-        leg_display = f"{symbol} {leg_type}"
-    else:
-        leg_display = symbol
-    global _last_trade
-    _last_trade = {
+        result = str(reason)
+
+    win = pnl > 0
+    loss = pnl < 0
+    st = pt.setdefault("stats", {})
+    st["total_trades"] = int(st.get("total_trades") or 0) + 1
+    if win:
+        st["wins"] = int(st.get("wins") or 0) + 1
+    elif loss:
+        st["losses"] = int(st.get("losses") or 0) + 1
+    st["total_pnl"] = round(float(st.get("total_pnl") or 0.0) + pnl, 4)
+    _recompute_win_rate(st)
+    st["system_health"] = _system_health(st)
+
+    trade_id = pos.get("trade_id") or ""
+    leg = pos.get("leg") or f'{symbol} {pos.get("strike_label") or ""}'.strip()
+    closed = {
+        "trade_id": trade_id,
         "symbol": symbol,
-        "strike": leg_strike,
-        "strike_key": sk,
-        "type": leg_type,
-        "side": leg_type,
-        "leg": leg_display,
-        "result": result,
+        "signal": sig,
+        "strike": pos.get("strike_label"),
+        "leg": leg,
+        "type": pos.get("opt"),
+        "entry": entry,
+        "exit": round(exit_prem, 4),
         "pnl": pnl,
-        "entry": entry_px,
-        "exit": exit_px,
-        "entry_time": entry_time,
-        "exit_time": exit_time,
-        "duration_sec": duration_sec,
+        "result": result,
+        "exit_reason": reason,
+        "closed_at": time.time(),
+        "aggregate_signal_at_exit": aggregate_signal,
+        "index_price_at_exit": index_price,
     }
-    _append_closed(
+    pt["last_trade"] = closed
+    del pt["active"][symbol]
+
+    _append_jsonl(
         {
+            "event": "close",
+            "ts": _utc_now_iso(),
             "symbol": symbol,
-            "strike": leg_strike,
-            "strike_key": sk,
-            "type": leg_type,
-            "side": leg_type,
-            "leg": leg_display,
-            "entry": entry_px,
-            "exit": exit_px,
-            "entry_time": entry_time,
-            "exit_time": exit_time,
-            "duration_sec": duration_sec,
+            "trade_id": trade_id,
+            "entry": entry,
+            "exit": round(exit_prem, 4),
             "pnl": pnl,
             "result": result,
+            "reason": reason,
+            "signal": sig,
         }
     )
-    _last_exit_ts[symbol] = time.time()
-    del _active[symbol]
+    logger.info("[PAPER] CLOSE %s %s pnl=%s reason=%s", symbol, sig, pnl, reason)
 
 
-def _sync_dashboard(state: Dict[str, Any]) -> None:
-    active_out: Dict[str, Any] = {}
-    for sym, ac in _active.items():
-        entry_v = ac.get("entry")
-        tgt_v = ac.get("target")
-        sl_v = ac.get("stoploss")
-        cur = ac.get("last_prem")
-        pnl_pct = None
-        dist_tgt = None
-        dist_sl = None
-        if cur is not None and entry_v is not None:
-            try:
-                e = float(entry_v)
-                if e != 0:
-                    pnl_pct = ((float(cur) - e) / e) * 100.0
-            except (TypeError, ValueError):
-                pass
-        if cur is not None and tgt_v is not None:
-            try:
-                dist_tgt = float(tgt_v) - float(cur)
-            except (TypeError, ValueError):
-                pass
-        if cur is not None and sl_v is not None:
-            try:
-                dist_sl = float(cur) - float(sl_v)
-            except (TypeError, ValueError):
-                pass
-        active_out[sym] = {
-            "entry": entry_v,
-            "target": tgt_v,
-            "stoploss": sl_v,
-            "trailing_active": ac.get("trailing_active"),
-            "type": ac.get("type"),
-            "strike": ac.get("strike"),
-            "index_price": ac.get("index_price"),
-            "quantity": ac.get("quantity"),
-            "entry_time": ac.get("entry_time"),
-            "pnl_live": ac.get("pnl_live"),
-            "last_prem": cur,
-            "pnl_percent": pnl_pct,
-            "distance_to_target": dist_tgt,
-            "distance_to_sl": dist_sl,
-        }
-    state["paper_trades"] = {
-        "active": active_out,
-        "stats": _build_dashboard_stats(),
-        "insights": _build_dashboard_insights(),
-        "last_trade": _last_trade,
-        "guide": _DASHBOARD_GUIDE,
-    }
-
-
-def process_tick(
+def _maybe_open(
+    state: Dict[str, Any],
     symbol: str,
     final_fast: Dict[str, Any],
     chain_snapshot: Any,
-    state: Optional[Dict[str, Any]] = None,
+    aggregate: Dict[str, Any],
+    risk: Any,
 ) -> None:
-    """
-    O(1) per tick: one open paper position per symbol; trailing stop; optional re-entry gate.
-    """
+    pt = state.setdefault("paper_trades", _default_paper_state())
+    if symbol in (pt.get("active") or {}):
+        return
+
+    sig = str(aggregate.get("signal") or "NO_TRADE").upper()
+    if sig not in ("BUY_CE", "BUY_PE"):
+        return
     try:
-        spot_raw = final_fast.get("price")
-        try:
-            spot = float(spot_raw) if spot_raw is not None else None
-        except (TypeError, ValueError):
-            spot = None
+        conf = float(aggregate.get("confidence") or 0.0)
+    except (TypeError, ValueError):
+        conf = 0.0
+    if conf < _MIN_AGG_CONF:
+        return
+    if not _risk_passed(risk):
+        return
 
-        active = _active.get(symbol)
-        if active is not None:
-            if spot is not None:
-                active["index_price"] = spot
-            strike_key = active.get("strike_key")
-            option_type = active.get("type")
-            row = chain_snapshot.get(strike_key, {}) if isinstance(chain_snapshot, dict) else {}
-            leg = row.get(option_type) if isinstance(row, dict) else None
-            if not isinstance(leg, dict) or leg.get("ltp") is None:
-                if state is not None:
-                    _sync_dashboard(state)
-                return
-            try:
-                prem = float(leg.get("ltp"))
-            except (TypeError, ValueError):
-                if state is not None:
-                    _sync_dashboard(state)
-                return
+    price = float(final_fast.get("price") or 0.0)
+    sel = option_chain_service.select_strike_for_scalp(chain_snapshot, price, sig)
+    if not sel:
+        return
+    strike = float(sel["strike"])
+    opt = str(sel.get("type") or ("CE" if sig == "BUY_CE" else "PE"))
+    row = (
+        chain_snapshot.get(str(int(strike)))
+        or chain_snapshot.get(str(strike))
+        or {}
+    )
+    leg = row.get(opt) if isinstance(row, dict) else None
+    prem = option_chain_service.option_leg_last_price(leg) if leg else None
+    if prem is None:
+        prem = float(sel.get("premium") or 0.0)
+    if prem <= 0:
+        return
+    entry = round(float(prem), 2)
+    target = round(prem * 1.4, 2)
+    stoploss = round(prem * 0.8, 2)
+    trade_id = f"{symbol}_{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}"
+    strike_label = f"{int(strike)} {opt}"
 
-            # Sanity guard for mismatched/invalid option premium ticks.
-            last_prem = active.get("last_prem")
-            if last_prem is not None:
-                try:
-                    last_prem_f = float(last_prem)
-                    if last_prem_f > 0:
-                        drop_pct = abs(prem - last_prem_f) / last_prem_f
-                        if drop_pct > 0.8:
-                            prem = last_prem_f
-                    if prem < 5:
-                        prem = last_prem_f
-                except (TypeError, ValueError):
-                    pass
-            entry_px = float(active["entry"])
-            tgt = float(active["target"])
-            qty = int(active["quantity"])
-            hard_sl = float(active.get("hard_sl") or (entry_px * 0.85))
-            # Early panic-exit if option premium drops >5% in one tick.
-            rapid_drop = False
-            if last_prem is not None:
-                try:
-                    last_prem_f = float(last_prem)
-                    if last_prem_f > 0 and ((last_prem_f - prem) / last_prem_f) > 0.05:
-                        rapid_drop = True
-                except (TypeError, ValueError):
-                    pass
-            active["last_prem"] = prem
-            active["pnl_live"] = (prem - entry_px) * qty
-            # Track movement timestamp for early stale-exit checks.
-            try:
-                move_eps = max(0.2, entry_px * 0.002)
-            except Exception:
-                move_eps = 0.2
-            if last_prem is None or abs(float(prem) - float(last_prem)) >= move_eps:
-                active["last_move_ts"] = time.time()
-
-            # 2-stage trailing:
-            #   Stage-1: at +20%, move SL to breakeven.
-            #   Stage-2: near target zone, trail at 90% of live premium.
-            if prem >= entry_px * 1.2:
-                active["trailing_active"] = True
-                active["stoploss"] = max(float(active["stoploss"]), entry_px)
-            if tgt > 0 and prem >= tgt * 0.7:
-                active["trailing_active"] = True
-                active["stoploss"] = max(float(active["stoploss"]), prem * 0.9)
-            # Simulated partial booking marker.
-            if not bool(active.get("half_booked")) and prem >= entry_px * 1.25:
-                active["half_booked"] = True
-
-            sl = float(active["stoploss"])
-            if prem >= tgt:
-                _close_trade(symbol, active, prem, "FULL_TARGET")
-            elif rapid_drop:
-                _close_trade(symbol, active, prem, "LOSS")
-            elif prem <= min(sl, hard_sl):
-                res = "TRAIL_EXIT" if active.get("trailing_active") else "LOSS"
-                _close_trade(symbol, active, prem, res)
-            elif (time.time() - float(active.get("last_move_ts") or time.time())) >= 20.0:
-                _close_trade(symbol, active, prem, "TRAIL_EXIT")
-
-            if symbol in _active:
-                if state is not None:
-                    _sync_dashboard(state)
-                return
-
-        # Flat
-        ed = final_fast.get("entry_decision")
-        strike_label = final_fast.get("strike")
-        sk, side = _strike_key_side(strike_label)
-        prem_flat: Optional[float] = None
-        if sk and side in ("CE", "PE"):
-            prem_flat = _ltp(chain_snapshot, sk, side)
-
-        if ed not in ("BUY_CE", "BUY_PE"):
-            _update_flat_hist(symbol, spot, prem_flat)
-            if state is not None:
-                _sync_dashboard(state)
-            return
-        # Cooldown after exit to avoid immediate churn.
-        if (time.time() - float(_last_exit_ts.get(symbol) or 0.0)) < 10.0:
-            _update_flat_hist(symbol, spot, prem_flat)
-            if state is not None:
-                _sync_dashboard(state)
-            return
-        # Max 6 entries/hour per symbol.
-        now_ts = time.time()
-        ts_list = _entry_ts.setdefault(symbol, [])
-        while ts_list and (now_ts - ts_list[0]) > 3600.0:
-            ts_list.pop(0)
-        if len(ts_list) >= 6:
-            _update_flat_hist(symbol, spot, prem_flat)
-            if state is not None:
-                _sync_dashboard(state)
-            return
-        entry = final_fast.get("entry")
-        target = final_fast.get("target")
-        stoploss = final_fast.get("stoploss")
-        if entry is None or target is None or stoploss is None:
-            _update_flat_hist(symbol, spot, prem_flat)
-            if state is not None:
-                _sync_dashboard(state)
-            return
-        if not sk or side not in ("CE", "PE"):
-            _update_flat_hist(symbol, spot, prem_flat)
-            if state is not None:
-                _sync_dashboard(state)
-            return
-        if (ed == "BUY_CE" and side != "CE") or (ed == "BUY_PE" and side != "PE"):
-            _update_flat_hist(symbol, spot, prem_flat)
-            if state is not None:
-                _sync_dashboard(state)
-            return
-        try:
-            entry_f = float(entry)
-            tgt_f = float(target)
-            sl_f = float(stoploss)
-        except (TypeError, ValueError):
-            _update_flat_hist(symbol, spot, prem_flat)
-            if state is not None:
-                _sync_dashboard(state)
-            return
-        if entry_f <= 0:
-            _update_flat_hist(symbol, spot, prem_flat)
-            if state is not None:
-                _sync_dashboard(state)
-            return
-
-        if not _reentry_ok(symbol, ed, spot, prem_flat):
-            _update_flat_hist(symbol, spot, prem_flat)
-            if state is not None:
-                _sync_dashboard(state)
-            return
-
-        # Entry filters: keep O(1) using only current + latest flat history values.
-        if prem_flat is None or prem_flat < 30 or prem_flat > 300:
-            _update_flat_hist(symbol, spot, prem_flat)
-            if state is not None:
-                _sync_dashboard(state)
-            return
-        try:
-            strike_f = float(sk)
-        except (TypeError, ValueError):
-            strike_f = None
-        if strike_f is None or spot is None or abs(strike_f - float(spot)) > 150:
-            _update_flat_hist(symbol, spot, prem_flat)
-            if state is not None:
-                _sync_dashboard(state)
-            return
-        # Safety: skip low-liquidity or high-spread entries.
-        row = chain_snapshot.get(sk, {}) if isinstance(chain_snapshot, dict) else {}
-        leg = row.get(side) if isinstance(row, dict) else None
-        if not isinstance(leg, dict):
-            _update_flat_hist(symbol, spot, prem_flat)
-            if state is not None:
-                _sync_dashboard(state)
-            return
-        vol_now = float(leg.get("volume") or 0.0)
-        if vol_now <= 0:
-            _update_flat_hist(symbol, spot, prem_flat)
-            if state is not None:
-                _sync_dashboard(state)
-            return
-        try:
-            bid = float(leg.get("bid_price")) if leg.get("bid_price") is not None else None
-            ask = float(leg.get("ask_price")) if leg.get("ask_price") is not None else None
-        except (TypeError, ValueError):
-            bid, ask = None, None
-        if bid is not None and ask is not None and ask > 0 and ((ask - bid) / ask) > 0.03:
-            _update_flat_hist(symbol, spot, prem_flat)
-            if state is not None:
-                _sync_dashboard(state)
-            return
-        hist = _flat_hist.get(symbol) or {}
-        prev_spot = (hist.get("spot") or (None, None))[1]
-        prev_prem = (hist.get("prem") or (None, None))[1]
-        # Trade scoring gate: confidence + momentum + volume.
-        conf_now = float(final_fast.get("confidence") or 0.0)
-        if prev_spot is not None and spot is not None and float(prev_spot) != 0:
-            mom_component = abs((float(spot) - float(prev_spot)) / float(prev_spot)) * 1000.0
-        else:
-            mom_component = 0.0
-        vol_component = min(20.0, vol_now / 5000.0)
-        trade_score = conf_now + mom_component + vol_component
-        if trade_score < 72.0:
-            _update_flat_hist(symbol, spot, prem_flat)
-            if state is not None:
-                _sync_dashboard(state)
-            return
-        # Pullback entry filter: enter only on >=2% premium pullback.
-        if prev_prem is not None and prem_flat is not None and float(prem_flat) >= float(prev_prem) * 0.98:
-            _update_flat_hist(symbol, spot, prem_flat)
-            if state is not None:
-                _sync_dashboard(state)
-            return
-        if prev_prem is not None and abs(float(prem_flat) - float(prev_prem)) < 5:
-            _update_flat_hist(symbol, spot, prem_flat)
-            if state is not None:
-                _sync_dashboard(state)
-            return
-        if prev_spot is not None and spot is not None and abs(float(spot) - float(prev_spot)) < 8:
-            _update_flat_hist(symbol, spot, prem_flat)
-            if state is not None:
-                _sync_dashboard(state)
-            return
-
-        lot = _LOT_SIZE_BY_SYMBOL.get(symbol.upper(), _LOT_SIZE_BY_SYMBOL["NIFTY"])
-        lots = _lots_for_confidence(float(final_fast.get("confidence") or 0.0))
-        qty = int(lot * lots)
-        # Dynamic target by trend strength.
-        strong_trend = mom_component >= 0.8
-        tgt_f = float(entry_f * (1.6 if strong_trend else 1.3))
-        _active[symbol] = {
-            "entry": entry_f,
-            "target": tgt_f,
-            "stoploss": sl_f,
-            "hard_sl": entry_f * 0.85,
-            "trailing_active": False,
-            "half_booked": False,
-            "last_move_ts": time.time(),
-            "type": side,
-            "strike": strike_label if isinstance(strike_label, str) else f"{sk} {side}",
-            "strike_key": sk,
-            "quantity": qty,
-            "lots": lots,
-            # Optional scaling metadata (split lots model, still O(1) and single managed position).
-            "entries": [
-                {"qty": qty // 2, "entry": entry_f},
-                {"qty": qty - (qty // 2), "entry": entry_f},
-            ],
-            "entry_time": datetime.now(timezone.utc).isoformat(),
-            "pnl_live": None,
-            "last_prem": None,
+    pos = {
+        "trade_id": trade_id,
+        "signal": sig,
+        "opt": opt,
+        "strike": strike,
+        "strike_label": strike_label,
+        "leg": f"{symbol} {strike_label}",
+        "entry": entry,
+        "target": target,
+        "stoploss": stoploss,
+        "opened_at": time.time(),
+        "open_confidence": conf,
+    }
+    pt.setdefault("active", {})[symbol] = pos
+    _append_jsonl(
+        {
+            "event": "open",
+            "ts": _utc_now_iso(),
+            "symbol": symbol,
+            "trade_id": trade_id,
+            "signal": sig,
+            "strike": strike_label,
+            "entry": entry,
+            "target": target,
+            "stoploss": stoploss,
+            "aggregate_confidence": conf,
+            "risk_passed": True,
         }
-        ts_list.append(now_ts)
-        _update_flat_hist(symbol, spot, prem_flat)
-        if state is not None:
-            _sync_dashboard(state)
-    except Exception:
-        if state is not None:
-            try:
-                _sync_dashboard(state)
-            except Exception:
-                pass
+    )
+    logger.info("[PAPER] OPEN %s %s @ %s tgt=%s sl=%s conf=%s", symbol, strike_label, entry, target, stoploss, conf)
+
+
+def _update_active_position(
+    state: Dict[str, Any],
+    symbol: str,
+    pos: Dict[str, Any],
+    chain_snapshot: Any,
+    final_fast: Dict[str, Any],
+    aggregate: Dict[str, Any],
+) -> bool:
+    """Returns True if position was closed this call."""
+    price = float(final_fast.get("price") or 0.0)
+    strike = float(pos.get("strike") or 0.0)
+    opt = str(pos.get("opt") or "CE")
+    entry = float(pos.get("entry") or 0.0)
+    target = float(pos.get("target") or 0.0)
+    stoploss = float(pos.get("stoploss") or 0.0)
+    ltp = _leg_ltp(chain_snapshot, strike, opt)
+    if ltp <= 0:
+        ltp = entry
+
+    agg_sig = str(aggregate.get("signal") or "NO_TRADE").upper()
+    if ltp <= stoploss:
+        _close_trade(state, symbol, pos, ltp, "SL", price, agg_sig)
+        return True
+    if ltp >= target:
+        _close_trade(state, symbol, pos, ltp, "TARGET", price, agg_sig)
+        return True
+
+    pt = state["paper_trades"]
+    pnl_live = round(ltp - entry, 4)
+    pnl_pct = round((pnl_live / entry) * 100.0, 2) if entry > 0 else 0.0
+    pt["active"][symbol] = {
+        **pos,
+        "index_price": price,
+        "last_prem": round(ltp, 4),
+        "pnl_live": pnl_live,
+        "pnl_percent": pnl_pct,
+        "distance_to_target": round(target - ltp, 4),
+        "distance_to_sl": round(ltp - stoploss, 4),
+    }
+    return False
+
+
+def process_tick(symbol: str, final_fast: Dict[str, Any], chain_snapshot: Any, state: Dict[str, Any]) -> None:
+    if not state.get(_BOOTSTRAP_KEY):
+        bootstrap(state)
+
+    aggregate = final_fast.get("platform_aggregate") or {}
+    if not isinstance(aggregate, dict):
+        aggregate = {}
+    risk = final_fast.get("platform_risk") or {}
+    if not isinstance(risk, dict):
+        risk = {}
+    pt = state.setdefault("paper_trades", _default_paper_state())
+    pt.setdefault("active", {})
+    pt.setdefault("stats", _default_paper_state()["stats"])
+    st = pt["stats"]
+    st.setdefault("system_health", _system_health(st))
+
+    sym = str(symbol or "").upper()
+    active = pt["active"].get(sym)
+
+    closed = False
+    if active:
+        closed = _update_active_position(state, sym, active, chain_snapshot, final_fast, aggregate)
+
+    if not closed and sym not in pt.get("active", {}):
+        _maybe_open(state, sym, final_fast, chain_snapshot, aggregate, risk)
+
+    st["system_health"] = _system_health(st)

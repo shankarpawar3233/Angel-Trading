@@ -111,6 +111,79 @@ def _append_signal_record_safe(symbol: str, ts: datetime, payload: Dict[str, Any
         logger.debug("Failed to append signal record for %s: %s", symbol, exc)
 
 
+def _publish_waiting_signal_state(symbol: str, reason: str) -> None:
+    """No index / chain / stale feed: full scalping-shaped payload so /signals and UI never see an empty row."""
+    ts = datetime.now(timezone.utc)
+    waiting = {
+        "symbol": symbol,
+        "price": 0.0,
+        "signal": "NO_TRADE",
+        "trade": "NO_TRADE",
+        "confidence": 0,
+        "entry_decision": "HOLD",
+        "decision_reason": reason,
+        "stable_count": 0,
+        "lock_remaining_sec": 0,
+        "hero_zero": None,
+        "strike": None,
+        "entry": None,
+        "target": None,
+        "stoploss": None,
+        "price_source": "waiting_live",
+    }
+    state["market"][symbol] = {
+        "symbol": symbol,
+        "last_price": None,
+        "ts": ts.isoformat(),
+        "price_source": "waiting_live",
+    }
+    state["fast_signals"][symbol] = waiting
+    state["signals"][symbol] = {
+        "trade": "NO_TRADE",
+        "confidence": 0,
+        "entry_decision": "HOLD",
+        "decision_reason": reason,
+        "stable_count": 0,
+        "lock_remaining_sec": 0,
+        "hero_zero": [],
+        "oi_analysis": {"pcr": 0.0, "ce_oi_total": 0.0, "pe_oi_total": 0.0, "max_oi_call": None, "max_oi_put": None, "oi_spikes": []},
+        "ml": {"label": "NO_TRADE", "confidence": 0},
+        "scalping": {
+            "trade": "NO_TRADE",
+            "confidence": 0,
+            "entry_decision": "HOLD",
+            "decision_reason": reason,
+            "stable_count": 0,
+            "strike": None,
+            "chain_ltp": None,
+            "entry": None,
+            "target": None,
+            "stoploss": None,
+        },
+        "symbol": symbol,
+        "price": 0.0,
+    }
+    state["final_signal"][symbol] = {
+        "symbol": symbol,
+        "price": 0.0,
+        "trade": "NO_TRADE",
+        "confidence": 0,
+        "entry_decision": "HOLD",
+        "decision_reason": reason,
+        "stable_count": 0,
+        "lock_remaining_sec": 0,
+        "hero_zero": None,
+        "entry": None,
+        "target": None,
+        "stoploss": None,
+        "strike": None,
+        "regime": None,
+        "gamma_wall": None,
+        "max_pain": None,
+        "institutional_flow": None,
+    }
+
+
 async def compute_for_symbol(symbol: str):
     """
     High-performance live path:
@@ -123,80 +196,10 @@ async def compute_for_symbol(symbol: str):
     """
     su = symbol.upper()
 
-    def _publish_waiting_state(reason: str) -> None:
-        ts = datetime.now(timezone.utc)
-        waiting = {
-            "symbol": symbol,
-            "price": 0.0,
-            "signal": "NO_TRADE",
-            "trade": "NO_TRADE",
-            "confidence": 0,
-            "entry_decision": "HOLD",
-            "decision_reason": reason,
-            "stable_count": 0,
-            "lock_remaining_sec": 0,
-            "hero_zero": None,
-            "strike": None,
-            "entry": None,
-            "target": None,
-            "stoploss": None,
-            "price_source": "waiting_live",
-        }
-        state["market"][symbol] = {
-            "symbol": symbol,
-            "last_price": None,
-            "ts": ts.isoformat(),
-            "price_source": "waiting_live",
-        }
-        state["fast_signals"][symbol] = waiting
-        state["signals"][symbol] = {
-            "trade": "NO_TRADE",
-            "confidence": 0,
-            "entry_decision": "HOLD",
-            "decision_reason": reason,
-            "stable_count": 0,
-            "lock_remaining_sec": 0,
-            "hero_zero": [],
-            "oi_analysis": {"pcr": 0.0, "ce_oi_total": 0.0, "pe_oi_total": 0.0, "max_oi_call": None, "max_oi_put": None, "oi_spikes": []},
-            "ml": {"label": "NO_TRADE", "confidence": 0},
-            "scalping": {
-                "trade": "NO_TRADE",
-                "confidence": 0,
-                "entry_decision": "HOLD",
-                "decision_reason": reason,
-                "stable_count": 0,
-                "strike": None,
-                "entry": None,
-                "target": None,
-                "stoploss": None,
-            },
-            "symbol": symbol,
-            "price": 0.0,
-        }
-        state["final_signal"][symbol] = {
-            "symbol": symbol,
-            "price": 0.0,
-            "trade": "NO_TRADE",
-            "confidence": 0,
-            "entry_decision": "HOLD",
-            "decision_reason": reason,
-            "stable_count": 0,
-            "lock_remaining_sec": 0,
-            "hero_zero": None,
-            "entry": None,
-            "target": None,
-            "stoploss": None,
-            "strike": None,
-            "regime": None,
-            "gamma_wall": None,
-            "max_pain": None,
-            "institutional_flow": None,
-        }
-
     price = get_index_ltp(su)
     chain_snapshot = get_option_chain_snapshot(su)
     if not price or float(price) <= 0:
-        _publish_waiting_state("waiting_index_price")
+        _publish_waiting_signal_state(symbol, "waiting_index_price")
         return
     price = float(price)
     health = get_feed_health_snapshot()
@@ -206,7 +209,7 @@ async def compute_for_symbol(symbol: str):
         max_age = 42.0
     idx_age = health.get("last_index_tick_age_sec")
     if idx_age is not None and idx_age > max_age:
-        _publish_waiting_state(f"stale_index_feed_{int(idx_age)}s")
+        _publish_waiting_signal_state(symbol, f"stale_index_feed_{int(idx_age)}s")
         return
     price_source = "angel_ws"
     if su == "NIFTY" and not chain_snapshot:
@@ -228,11 +231,11 @@ async def compute_for_symbol(symbol: str):
                 logger.debug("[LIVE] NIFTY chain from NSE fallback, strikes=%s", len(chain_snapshot))
         if not chain_snapshot:
             print("[SKIP] No live data", symbol, price, 0)
-            _publish_waiting_state("waiting_option_chain")
+            _publish_waiting_signal_state(symbol, "waiting_option_chain")
             return
     if su == "SENSEX" and not chain_snapshot:
         print("[SKIP] No live data", symbol, price, 0)
-        _publish_waiting_state("waiting_option_chain")
+        _publish_waiting_signal_state(symbol, "waiting_option_chain")
         return
 
     def _quick_oi(chain: Dict[str, Dict[str, Dict[str, Any]]]) -> Dict[str, Any]:
@@ -287,7 +290,10 @@ async def compute_for_symbol(symbol: str):
         "aggregate": platform["aggregate"],
         "aggregate_raw": platform.get("aggregate_raw"),
         "risk": platform["risk"],
+        "regime": platform.get("regime"),
+        "support_resistance": platform.get("support_resistance"),
     }
+    state.setdefault("market_regime", {})[symbol] = platform.get("regime")
 
     scalping_signal = str(sp.get("scalping_signal") or "NO_TRADE")
     confidence = int(sp.get("confidence") or 0)
@@ -304,10 +310,13 @@ async def compute_for_symbol(symbol: str):
     decision_reason = str(sp.get("decision_reason") or "")
     stable_count = int(sp.get("stable_count") or 0)
     lock_remaining = float(sp.get("lock_remaining") or 0.0)
+    vol_fb = bool(sp.get("volume_fallback_used") or features.get("volume_fallback_used"))
+    vol_avail = bool(sp.get("volume_available", features.get("volume_available", True)))
     if signal_engine.SIGNAL_DEBUG:
         mc, scy, elock = signal_engine.stabilizer_params(su, symbol)
         logger.info(
-            "[SIGNAL_DEBUG] %s sig=%s conf=%s entry=%s reason=%s | mom=%.5f coi=%.2f poi=%.2f cvol=%.2f pvol=%.2f | debug=%s | thresholds min_conf=%s stable=%s lock=%.1fs",
+            "[SIGNAL_DEBUG] %s sig=%s conf=%s entry=%s reason=%s | mom=%.5f coi=%.2f poi=%.2f cvol=%.2f pvol=%.2f | "
+            "volume_available=%s volume_fallback_used=%s | debug=%s | thresholds min_conf=%s stable=%s lock=%.1fs",
             symbol,
             scalping_signal,
             confidence,
@@ -318,6 +327,8 @@ async def compute_for_symbol(symbol: str):
             put_oi,
             call_vol,
             put_vol,
+            vol_avail,
+            vol_fb,
             ";".join(debug) or "-",
             mc,
             scy,
@@ -325,6 +336,7 @@ async def compute_for_symbol(symbol: str):
         )
 
     strike_label: Optional[str] = None
+    chain_ltp: Optional[float] = None
     entry: Optional[float] = None
     target: Optional[float] = None
     stoploss: Optional[float] = None
@@ -333,9 +345,19 @@ async def compute_for_symbol(symbol: str):
         sel = option_chain_service.select_strike_for_scalp(chain_snapshot, float(price or 0.0), scalping_signal)
         if sel:
             s_val = sel["strike"]
-            premium = sel["premium"]
-            strike_label = f"{int(s_val)} {'CE' if scalping_signal == 'BUY_CE' else 'PE'}"
-            entry = round(premium * 1.002, 2)
+            side_leg = "CE" if scalping_signal == "BUY_CE" else "PE"
+            row = (
+                chain_snapshot.get(str(int(s_val)))
+                or chain_snapshot.get(str(s_val))
+                or {}
+            )
+            leg = row.get(side_leg) if isinstance(row, dict) else None
+            premium = option_chain_service.option_leg_last_price(leg) if leg else None
+            if premium is None:
+                premium = float(sel["premium"] or 0.0)
+            chain_ltp = round(float(premium), 4) if premium is not None else None
+            strike_label = f"{int(s_val)} {side_leg}"
+            entry = round(float(premium), 2)
             target = round(premium * 1.4, 2)
             stoploss = round(premium * 0.8, 2)
 
@@ -350,6 +372,7 @@ async def compute_for_symbol(symbol: str):
         "lock_remaining_sec": int(round(lock_remaining)),
         "hero_zero": hero_zero,
         "strike": strike_label,
+        "chain_ltp": chain_ltp,
         "entry": entry,
         "target": target,
         "stoploss": stoploss,
@@ -359,6 +382,9 @@ async def compute_for_symbol(symbol: str):
         "call_volume_strength": call_vol,
         "put_volume_strength": put_vol,
         "price_momentum": mom,
+        "volume_available": vol_avail,
+        "volume_fallback_used": vol_fb,
+        "intent": (platform.get("aggregate") or {}).get("intent"),
     }
     ep = state.get("engine_platform", {}).get(symbol) or {}
     final_fast["platform_aggregate"] = ep.get("aggregate")
@@ -404,6 +430,7 @@ async def compute_for_symbol(symbol: str):
             "decision_reason": decision_reason,
             "stable_count": stable_count,
             "strike": strike_label,
+            "chain_ltp": chain_ltp,
             "entry": entry,
             "target": target,
             "stoploss": stoploss,
@@ -489,6 +516,8 @@ async def main_loop():
                 await compute_for_symbol(symbol)
             except Exception as exc:
                 logger.exception("Error in main loop for %s: %s", symbol, exc)
+                if symbol not in state.get("signals", {}):
+                    _publish_waiting_signal_state(symbol, f"tick_error:{type(exc).__name__}")
         await asyncio.sleep(0.5)
 
 
@@ -543,6 +572,7 @@ async def startup_event():
     attach_error_file_handler()
     logger.info("Initializing schema...")
     init_schema()
+    paper_trader.bootstrap(state)
     loop = asyncio.get_event_loop()
     loop.run_in_executor(None, bootstrap_historical_data)  # run in background, do not block
 
@@ -612,6 +642,10 @@ async def startup_event():
 
     if not _scheduler.running:
         _scheduler.start()
+
+    for sym in settings.indices:
+        if sym not in state["signals"]:
+            _publish_waiting_signal_state(sym, "startup_awaiting_first_tick")
 
     asyncio.create_task(main_loop())
     logger.info("API server ready. Docs: http://localhost:8000/docs")
@@ -922,7 +956,7 @@ async def get_aggregate():
 
 @app.get("/dashboard")
 async def get_engine_dashboard():
-    """Combined view: market price, each engine, aggregate, agreement ratio, fast path."""
+    """Combined view: market regime, agreement %, intent, S/R levels and engine outputs."""
     ep = state.get("engine_platform", {}) or {}
     market = state.get("market", {}) or {}
     out: Dict[str, Any] = {}
@@ -938,6 +972,9 @@ async def get_engine_dashboard():
             "aggregate_raw": pack.get("aggregate_raw"),
             "risk": pack.get("risk"),
             "agreement_ratio": (meta or {}).get("agreement_ratio"),
+            "signal_intent": (pack.get("aggregate") or {}).get("intent"),
+            "market_regime": pack.get("regime"),
+            "support_resistance": (pack.get("support_resistance") or {}).get("metadata"),
         }
     return {
         "dashboard": out,
@@ -948,7 +985,15 @@ async def get_engine_dashboard():
 @app.get("/paper-trades")
 async def get_paper_trades():
     """Paper-trading dashboard payload (active legs, stats, last trade, guide)."""
+    paper_trader.bootstrap(state)
     return {"paper_trades": state.get("paper_trades", {"active": {}, "stats": {}, "last_trade": None, "guide": {}})}
+
+
+@app.post("/paper-trades/reset")
+async def post_reset_paper_trades():
+    """Truncate logs/paper_trades.jsonl and zero stats, active positions, and last_trade."""
+    out = paper_trader.reset_paper_trades(state)
+    return {"ok": True, "paper_trades": out}
 
 
 @app.get("/signal-history")

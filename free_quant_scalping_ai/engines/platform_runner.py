@@ -5,9 +5,11 @@ from typing import Any, Dict, List, Optional
 
 from engines.aggregator import aggregate
 from engines.market_state import MarketState
+from engines.regime_detector import detect_regime
 from engines.registry import default_engines
 from engines.risk_engine import evaluate_risk
 from engines.scalping_pipeline import run_scalping_pipeline
+from engines.support_resistance_engine import SupportResistanceEngine
 
 
 def run_engine_tick(
@@ -72,14 +74,34 @@ def run_engine_tick(
     for eng in eng_list:
         engine_outputs[eng.name] = eng.process_tick(ms)
 
-    agg = aggregate(engine_outputs)
+    regime = ms.cache_get(
+        "regime",
+        lambda: detect_regime(
+            symbol=symbol,
+            price_history=sym_hist,
+            price=price,
+            oi_snap=oi_snap,
+            sp_result=sp_result,
+        ),
+    )
+    sr_engine = SupportResistanceEngine()
+    sr_output = sr_engine.process_tick(ms)
+    engine_outputs[sr_engine.name] = sr_output
+
+    agg = aggregate(
+        engine_outputs,
+        regime=regime,
+        support_resistance=sr_output.get("metadata") or {},
+    )
     risk_report, agg_after_risk = evaluate_risk(global_state, symbol, ms, agg)
 
     return {
         "scalping_pipeline": sp_result,
+        "regime": regime,
         "engines": engine_outputs,
         "aggregate": agg_after_risk,
         "aggregate_raw": agg,
         "risk": risk_report,
+        "support_resistance": sr_output,
         "market_state_ts": now_sec,
     }

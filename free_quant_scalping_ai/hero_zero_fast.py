@@ -17,6 +17,22 @@ logger = get_logger(__name__)
 ChainDict = Dict[str, Dict[str, Dict[str, Any]]]
 
 
+def _leg_ltp(leg: Any) -> float:
+    if not isinstance(leg, dict):
+        return 0.0
+    for key in ("ltp", "last_price", "lastPrice", "close"):
+        raw = leg.get(key)
+        if raw is None:
+            continue
+        try:
+            v = float(raw)
+            if v > 0:
+                return v
+        except (TypeError, ValueError):
+            continue
+    return 0.0
+
+
 def detect_hero_zero_fast(chain: ChainDict, price: float) -> Optional[Dict[str, Any]]:
     """
     Hero-zero candidate if:
@@ -55,7 +71,7 @@ def detect_hero_zero_fast(chain: ChainDict, price: float) -> Optional[Dict[str, 
             vol = float(leg.get("volume") or 0.0)
             oi = float(leg.get("oi") or 0.0)
             ch = float(leg.get("change_oi") or 0.0)
-            ltp_v = float(leg.get("ltp") or 0.0)
+            ltp_v = _leg_ltp(leg)
             total_vol += vol
             total_oi += oi
             if ch > 0:
@@ -79,7 +95,7 @@ def detect_hero_zero_fast(chain: ChainDict, price: float) -> Optional[Dict[str, 
         if abs(s_val - atm) > strike_window * step:
             continue  # outside configurable ATM window
         for opt_type, leg in sides.items():
-            ltp = float(leg.get("ltp") or 0.0)
+            ltp = _leg_ltp(leg)
             vol = float(leg.get("volume") or 0.0)
             oi = float(leg.get("oi") or 0.0)
             ch = float(leg.get("change_oi") or 0.0)
