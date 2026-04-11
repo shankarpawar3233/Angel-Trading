@@ -8,6 +8,29 @@ import os
 from typing import Any, Dict, Optional
 
 
+def chain_row_for_strike(chain: Dict[str, Any], s_val: float) -> Dict[str, Any]:
+    """Resolve option row dict for a strike; keys vary by feed (int string, float string, etc.)."""
+    if not isinstance(chain, dict) or not chain:
+        return {}
+    for key in (str(int(s_val)), str(s_val), str(float(s_val))):
+        row = chain.get(key)
+        if isinstance(row, dict) and row:
+            return row
+    try:
+        target = float(s_val)
+    except (TypeError, ValueError):
+        return {}
+    for k, row in chain.items():
+        if not isinstance(row, dict):
+            continue
+        try:
+            if abs(float(k) - target) < 1e-6:
+                return row
+        except (TypeError, ValueError):
+            continue
+    return {}
+
+
 def option_leg_last_price(leg: Any) -> Optional[float]:
     """Best-effort option LTP from WS / REST snapshots (keys differ by source)."""
     if not isinstance(leg, dict):
@@ -73,8 +96,7 @@ def select_strike_for_scalp(
     best_rank: Optional[tuple[float, float]] = None
 
     for s_val in candidates:
-        key = str(int(s_val))
-        row = chain.get(key) or chain.get(str(s_val)) or {}
+        row = chain_row_for_strike(chain, float(s_val))
         leg = row.get(side) if isinstance(row, dict) else None
         if not isinstance(leg, dict):
             continue
@@ -102,8 +124,7 @@ def select_strike_for_scalp(
     if best is not None:
         return best
 
-    atm_key = str(int(atm))
-    atm_row = chain.get(atm_key) or {}
+    atm_row = chain_row_for_strike(chain, float(atm))
     atm_leg = atm_row.get(side) if isinstance(atm_row, dict) else None
     if isinstance(atm_leg, dict):
         atm_premium = option_leg_last_price(atm_leg)

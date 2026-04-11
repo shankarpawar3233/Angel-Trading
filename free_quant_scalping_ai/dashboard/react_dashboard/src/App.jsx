@@ -79,9 +79,17 @@ function resolveScalpingPayload(s) {
       lock_remaining_sec: s.lock_remaining_sec ?? 0,
       strike: s.strike,
       chain_ltp: s.chain_ltp,
+      chain_ltp_age_sec: s.chain_ltp_age_sec,
       entry: s.entry,
       target: s.target,
       stoploss: s.stoploss,
+      aggregate_leg_signal: s.aggregate_leg_signal,
+      aggregate_leg_strike: s.aggregate_leg_strike,
+      aggregate_leg_chain_ltp: s.aggregate_leg_chain_ltp,
+      aggregate_leg_chain_ltp_age_sec: s.aggregate_leg_chain_ltp_age_sec,
+      aggregate_leg_entry: s.aggregate_leg_entry,
+      aggregate_leg_target: s.aggregate_leg_target,
+      aggregate_leg_stoploss: s.aggregate_leg_stoploss,
     }
   }
   return {
@@ -99,8 +107,31 @@ function getAggregateSignal(signalsEntry, finalEntry, enginePlatformEntry) {
   return sig != null && sig !== '' ? String(sig).trim() : ''
 }
 
+/** Multi-engine aggregate (confidence is not the same as fast scalping confidence). */
+function getAggregateEnginesMeta(signalsEntry, enginePlatformEntry) {
+  const agg =
+    signalsEntry?.engine_platform?.aggregate ??
+    enginePlatformEntry?.aggregate ??
+    null
+  if (!agg || typeof agg !== 'object') return null
+  return {
+    signal: agg.signal != null ? String(agg.signal).trim() : '',
+    confidence: agg.confidence,
+    reason: agg.reason != null ? String(agg.reason) : '',
+    intent: agg.intent != null ? String(agg.intent) : '',
+  }
+}
+
+function explainDecisionReason(reason) {
+  const r = String(reason || '').trim()
+  if (r === 'signal_not_directional') {
+    return 'Fast scalping output is not BUY_CE/BUY_PE at this tick (stabilizer / entry gate). This is separate from the consensus leg below.'
+  }
+  return ''
+}
+
 /**
- * Dashboard primary trade label.
+ * Dashboard primary trade label (aggregate-first — use outside the scalping card).
  * 1) Directional platform aggregate  2) Confirmed entry (BUY_CE/BUY_PE)  3) HOLD + raw BUY_* → CONTINUE_*
  * 4) NO_TRADE
  */
@@ -113,6 +144,27 @@ function resolvePrimaryTradeLabel({ aggregateSignal, entryDecision, rawTrade }) 
   if (ed === 'HOLD' && raw === 'BUY_CE') return 'CONTINUE_CE'
   if (ed === 'HOLD' && raw === 'BUY_PE') return 'CONTINUE_PE'
   return 'NO_TRADE'
+}
+
+/** Scalping card headline: fast pipeline only (never prefer platform aggregate over fast trade). */
+function resolveScalpingFastBadge({ entryDecision, rawTrade }) {
+  const ed = String(entryDecision || '').trim().toUpperCase()
+  const raw = String(rawTrade || '').trim().toUpperCase()
+  if (isDirectionalSignal(ed)) return ed
+  if (ed === 'HOLD' && raw === 'BUY_CE') return 'CONTINUE_CE'
+  if (ed === 'HOLD' && raw === 'BUY_PE') return 'CONTINUE_PE'
+  if (isDirectionalSignal(raw)) return raw
+  return 'NO_TRADE'
+}
+
+function fastBiasKey(entryDecision, rawTrade) {
+  const raw = String(rawTrade || '').trim().toUpperCase()
+  const ed = String(entryDecision || '').trim().toUpperCase()
+  if (ed === 'BUY_CE' || (ed === 'HOLD' && raw === 'BUY_CE')) return 'BUY_CE'
+  if (ed === 'BUY_PE' || (ed === 'HOLD' && raw === 'BUY_PE')) return 'BUY_PE'
+  if (raw === 'BUY_CE') return 'BUY_CE'
+  if (raw === 'BUY_PE') return 'BUY_PE'
+  return ''
 }
 
 /** Decision row: never show bare HOLD when model still says BUY_CE/BUY_PE */
@@ -233,19 +285,36 @@ function EngineSignalsSection({ enginePlatform, symbols }) {
   )
 }
 
-function ScalpingCard({ symbol, scalping, heroZero, onPlaceOrder, aggregateSignal }) {
+function ScalpingCard({ symbol, scalping, heroZero, onPlaceOrder, aggregateSignal, aggregateEngines }) {
   if (!scalping) return null
   const rawTrade = scalping.trade || scalping.signal
   const entryDecision = scalping.entry_decision || 'HOLD'
-  const primaryLabel = resolvePrimaryTradeLabel({
-    aggregateSignal,
-    entryDecision,
-    rawTrade,
-  })
+  const primaryLabel = resolveScalpingFastBadge({ entryDecision, rawTrade })
+  const aggU = String(aggregateSignal || '').trim().toUpperCase()
+  const fastK = fastBiasKey(entryDecision, rawTrade)
+  const aggregateDiffers =
+    isDirectionalSignal(aggU) && fastK !== aggU
+  const fastIsDirectional = isDirectionalSignal(String(rawTrade || '').trim().toUpperCase())
   const decisionLabel = formatDecisionRowLabel(entryDecision, rawTrade)
   const decisionReason = scalping.decision_reason || 'n/a'
+  const reasonHint = explainDecisionReason(decisionReason)
   const stableCount = scalping.stable_count != null ? scalping.stable_count : 0
   const lockRemaining = scalping.lock_remaining_sec != null ? scalping.lock_remaining_sec : 0
+  const aggLeg = scalping.aggregate_leg_strike
+    ? {
+        strike: scalping.aggregate_leg_strike,
+        signal: scalping.aggregate_leg_signal,
+        ltp: scalping.aggregate_leg_chain_ltp,
+        ltpAgeSec: scalping.aggregate_leg_chain_ltp_age_sec,
+        entry: scalping.aggregate_leg_entry,
+        target: scalping.aggregate_leg_target,
+        sl: scalping.aggregate_leg_stoploss,
+      }
+    : null
+  const aggConf =
+    aggregateEngines?.confidence != null && aggregateEngines.confidence !== ''
+      ? Math.round(Number(aggregateEngines.confidence))
+      : null
   return (
     <div className={`rounded-lg border p-3 ${primaryTradeCardBorderClass(primaryLabel)}`}>
       <div className="flex items-center justify-between mb-2">
@@ -254,6 +323,23 @@ function ScalpingCard({ symbol, scalping, heroZero, onPlaceOrder, aggregateSigna
           {primaryLabel}
         </span>
       </div>
+      {aggregateDiffers && (
+        <div className="text-[10px] font-mono text-amber-400/90 mb-2 leading-snug space-y-1">
+          <p>
+            <span className="text-amber-300/80">Engines (aggregate):</span>{' '}
+            <span className="font-semibold text-amber-300">{aggU}</span>
+            {aggConf != null && (
+              <span className="text-slate-500"> · {aggConf}%</span>
+            )}
+          </p>
+          <p className="text-slate-400">
+            {primaryLabel === 'NO_TRADE'
+              ? 'Fast scalping is not directional (entry gate / stabilizer). The first grid stays empty until fast says BUY_CE or BUY_PE. Consensus below is the multi-engine side + hypothetical strike — reference only, not a fast “go” signal.'
+              : 'Headline and first grid follow the fast scalping path; aggregate can differ when engines disagree with the stabilizer.'}
+          </p>
+        </div>
+      )}
+      <div className="text-[10px] uppercase tracking-wide text-slate-500 mb-1 font-mono">Fast scalping leg</div>
       <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm font-mono">
         <span className="text-slate-500">Strike</span>
         <span className="text-slate-200">{scalping.strike || '–'}</span>
@@ -263,6 +349,10 @@ function ScalpingCard({ symbol, scalping, heroZero, onPlaceOrder, aggregateSigna
             ? Number(scalping.chain_ltp).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
             : '–'}
         </span>
+        <span className="text-slate-500">LTP age</span>
+        <span className={(scalping.chain_ltp_age_sec != null && Number(scalping.chain_ltp_age_sec) > 2.0) ? 'text-amber-400' : 'text-slate-300'}>
+          {scalping.chain_ltp_age_sec != null ? `${Number(scalping.chain_ltp_age_sec).toFixed(1)}s` : '–'}
+        </span>
         <span className="text-slate-500">Entry</span>
         <span className="text-white">{scalping.entry != null ? scalping.entry : '–'}</span>
         <span className="text-slate-500">Target</span>
@@ -270,13 +360,45 @@ function ScalpingCard({ symbol, scalping, heroZero, onPlaceOrder, aggregateSigna
         <span className="text-slate-500">SL</span>
         <span className="text-red-400">{scalping.stoploss != null ? scalping.stoploss : '–'}</span>
       </div>
+      {aggLeg && (
+        <div className="mt-2 pt-2 border-t border-slate-700/70">
+          <div className="text-[10px] uppercase tracking-wide text-slate-500 mb-0.5 font-mono">
+            Consensus leg ({String(aggLeg.signal || 'aggregate').trim()})
+          </div>
+          <p className="text-[10px] text-slate-500 mb-1 leading-snug">
+            From platform aggregate + live chain. Use as context; fast scalping must still align for a timed entry.
+          </p>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm font-mono">
+            <span className="text-slate-500">Strike</span>
+            <span className="text-slate-200">{aggLeg.strike || '–'}</span>
+            <span className="text-slate-500">Option LTP</span>
+            <span className="text-slate-200">
+              {aggLeg.ltp != null && aggLeg.ltp !== ''
+                ? Number(aggLeg.ltp).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                : '–'}
+            </span>
+            <span className="text-slate-500">LTP age</span>
+            <span className={(aggLeg.ltpAgeSec != null && Number(aggLeg.ltpAgeSec) > 2.0) ? 'text-amber-400' : 'text-slate-300'}>
+              {aggLeg.ltpAgeSec != null ? `${Number(aggLeg.ltpAgeSec).toFixed(1)}s` : '–'}
+            </span>
+            <span className="text-slate-500">Entry</span>
+            <span className="text-white">{aggLeg.entry != null ? aggLeg.entry : '–'}</span>
+            <span className="text-slate-500">Target</span>
+            <span className="text-emerald-400">{aggLeg.target != null ? aggLeg.target : '–'}</span>
+            <span className="text-slate-500">SL</span>
+            <span className="text-red-400">{aggLeg.sl != null ? aggLeg.sl : '–'}</span>
+          </div>
+        </div>
+      )}
       <div className="mt-2 text-xs font-mono grid grid-cols-2 gap-y-1">
         <span className="text-slate-500">Decision</span>
         <span className={decisionRowClass(decisionLabel)}>{decisionLabel}</span>
         <span className="text-slate-500">Stable count</span>
         <span className="text-slate-200">{stableCount}</span>
         <span className="text-slate-500">Reason</span>
-        <span className="text-slate-300 truncate" title={decisionReason}>{decisionReason}</span>
+        <span className="text-slate-300 truncate" title={reasonHint || decisionReason}>
+          {decisionReason}
+        </span>
         {lockRemaining > 0 && (
           <>
             <span className="text-slate-500">Lock</span>
@@ -284,18 +406,60 @@ function ScalpingCard({ symbol, scalping, heroZero, onPlaceOrder, aggregateSigna
           </>
         )}
       </div>
-      <div className="mt-2 flex items-center justify-between">
-        <span className="text-xs text-slate-400">
-          Confidence: <span className="text-slate-200">{scalping.confidence != null ? Math.round(scalping.confidence) : 0}%</span>
+      <div className="mt-2 space-y-1">
+        <div className="text-xs text-slate-400">
+          Fast scalping confidence:{' '}
+          <span className="text-slate-200">{scalping.confidence != null ? Math.round(scalping.confidence) : 0}%</span>
+          {!fastIsDirectional && (
+            <span className="text-slate-500"> (model score; not an entry trigger while trade is NO_TRADE)</span>
+          )}
+        </div>
+        {aggConf != null && aggregateDiffers && (
+          <div className="text-xs text-slate-400">
+            Aggregate (engines): <span className="text-slate-200">{aggConf}%</span>
+            <span className="text-slate-500"> · separate from fast above</span>
+          </div>
+        )}
+        {reasonHint && (
+          <p className="text-[10px] text-slate-500 leading-snug">{reasonHint}</p>
+        )}
+      </div>
+      <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+        <span className="text-[10px] text-slate-500 max-w-[14rem]">
+          {fastIsDirectional
+            ? 'Place order uses the fast leg row.'
+            : 'Fast path is not directional — use a live order only if you accept consensus risk.'}
         </span>
         {onPlaceOrder && (
-          <button
-            type="button"
-            onClick={() => onPlaceOrder(symbol, scalping)}
-            className="text-xs px-2 py-1 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 hover:bg-emerald-500/30"
-          >
-            Place order
-          </button>
+          <div className="flex flex-wrap gap-1.5 justify-end">
+            <button
+              type="button"
+              disabled={!fastIsDirectional}
+              title={
+                fastIsDirectional
+                  ? 'Add stub order from fast scalping leg'
+                  : 'Enable when fast trade is BUY_CE or BUY_PE'
+              }
+              onClick={() => onPlaceOrder(symbol, scalping, { useConsensus: false })}
+              className={`text-xs px-2 py-1 rounded border ${
+                fastIsDirectional
+                  ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40 hover:bg-emerald-500/30'
+                  : 'bg-slate-800 text-slate-500 border-slate-600 cursor-not-allowed'
+              }`}
+            >
+              Place order (fast)
+            </button>
+            {aggLeg && (
+              <button
+                type="button"
+                title="Draft using consensus strike / entry / target / SL (not fast-confirmed)"
+                onClick={() => onPlaceOrder(symbol, scalping, { useConsensus: true })}
+                className="text-xs px-2 py-1 rounded bg-slate-700/80 text-slate-200 border border-slate-600 hover:bg-slate-600/80"
+              >
+                Draft (consensus)
+              </button>
+            )}
+          </div>
         )}
       </div>
       <div className="mt-3 pt-3 border-t border-slate-700/50">
@@ -556,7 +720,12 @@ function PlacedOrders({ orders, onExit }) {
       {list.map((o) => (
         <div key={o.id} className="rounded border border-slate-700 bg-slate-950/40 p-3 flex items-center justify-between">
           <div className="font-mono text-sm">
-            <div className="text-slate-200 font-semibold">{o.symbol} {o.trade} {o.strike}</div>
+            <div className="text-slate-200 font-semibold">
+              {o.symbol} {o.trade} {o.strike}
+              {o.source === 'consensus' && (
+                <span className="ml-2 text-[10px] font-normal text-amber-400/90">(consensus draft)</span>
+              )}
+            </div>
             <div className="text-slate-400 text-xs">Entry: {o.entry ?? '–'} | Target: {o.target ?? '–'} | SL: {o.stoploss ?? '–'}</div>
             <div className="text-slate-500 text-xs">Placed: {o.placedAt}</div>
           </div>
@@ -1092,16 +1261,20 @@ export default function App() {
   )
   const mlRlEntries = signalEntries.filter(([, s]) => Boolean(s?.ml?.label) || Boolean(s?.rl?.action))
 
-  const placeOrder = (symbol, scalping) => {
+  const placeOrder = (symbol, scalping, opts = {}) => {
+    const useConsensus = opts.useConsensus === true
     const o = {
       id: `${Date.now()}_${Math.random().toString(16).slice(2)}`,
       symbol,
-      trade: scalping?.trade || '–',
-      strike: scalping?.strike || '–',
-      entry: scalping?.entry,
-      target: scalping?.target,
-      stoploss: scalping?.stoploss,
+      trade: useConsensus
+        ? scalping?.aggregate_leg_signal || scalping?.trade || '–'
+        : scalping?.trade || '–',
+      strike: useConsensus ? scalping?.aggregate_leg_strike || '–' : scalping?.strike || '–',
+      entry: useConsensus ? scalping?.aggregate_leg_entry : scalping?.entry,
+      target: useConsensus ? scalping?.aggregate_leg_target : scalping?.target,
+      stoploss: useConsensus ? scalping?.aggregate_leg_stoploss : scalping?.stoploss,
       placedAt: new Date().toLocaleTimeString(),
+      source: useConsensus ? 'consensus' : 'fast',
     }
     setOrders((prev) => [o, ...prev].slice(0, 25))
   }
@@ -1127,40 +1300,23 @@ export default function App() {
     }
   }
 
-  const load = async () => {
+  const POLL_FAST_MS = Number(import.meta.env.VITE_POLL_FAST_MS) || 1000
+  const POLL_SLOW_MS = Number(import.meta.env.VITE_POLL_SLOW_MS) || 5000
+
+  const loadFast = async () => {
     try {
-      const [marketRes, signalsRes, oiRes, regimeRes, liqRes, stopRes, finalRes, wsHealthRes, paperRes, histN, histS, enginesRes] = await Promise.all([
+      const [marketRes, signalsRes, enginesRes, wsHealthRes, paperRes] = await Promise.all([
         fetchMarket(),
         fetchSignals(),
-        fetchOi().catch(() => ({})),
-        fetchMarketRegime().catch(() => ({ market_regime: {} })),
-        fetchLiquidityMap().catch(() => ({ liquidity_map: {} })),
-        fetchStopHunts().catch(() => ({ stop_hunts: {} })),
-        fetchFinalSignal().catch(() => ({ final_signal: {} })),
+        fetchEngines().catch(() => ({ engine_platform: {} })),
         fetchWsHealth().catch(() => ({ ws_health: {} })),
         fetchPaperTrades().catch(() => ({ paper_trades: {} })),
-        fetchSignalHistory('NIFTY', 100).catch(() => ({ history: [] })),
-        fetchSignalHistory('SENSEX', 100).catch(() => ({ history: [] })),
-        fetchEngines().catch(() => ({ engine_platform: {} })),
       ])
       setMarket(marketRes.market || {})
       setSignals(signalsRes.signals || {})
-      setOi(oiRes || {})
-      setMarketRegime(regimeRes.market_regime || {})
-      setLiquidityMap(liqRes.liquidity_map || {})
-      setStopHunts(stopRes.stop_hunts || {})
-      setFinalSignal(finalRes.final_signal || {})
       setEnginePlatform(enginesRes.engine_platform || {})
       setWsHealth(wsHealthRes?.ws_health || {})
       setPaperTrades(paperRes?.paper_trades || {})
-      const hn = histN?.history || []
-      const hs = histS?.history || []
-      const merged = [...hn, ...hs].sort((a, b) => {
-        const ta = new Date(a.ts || 0).getTime()
-        const tb = new Date(b.ts || 0).getTime()
-        return tb - ta
-      })
-      setSignalHistoryRows(merged.slice(0, 120))
       setModelVersion(signalsRes.model_version || marketRes.model_version || null)
       setLastUpdate(new Date())
       setError(null)
@@ -1169,10 +1325,46 @@ export default function App() {
     }
   }
 
+  const loadSlow = async () => {
+    try {
+      const [oiRes, regimeRes, liqRes, stopRes, finalRes, histN, histS] = await Promise.all([
+        fetchOi().catch(() => ({})),
+        fetchMarketRegime().catch(() => ({ market_regime: {} })),
+        fetchLiquidityMap().catch(() => ({ liquidity_map: {} })),
+        fetchStopHunts().catch(() => ({ stop_hunts: {} })),
+        fetchFinalSignal().catch(() => ({ final_signal: {} })),
+        fetchSignalHistory('NIFTY', 100).catch(() => ({ history: [] })),
+        fetchSignalHistory('SENSEX', 100).catch(() => ({ history: [] })),
+      ])
+      setOi(oiRes || {})
+      setMarketRegime(regimeRes.market_regime || {})
+      setLiquidityMap(liqRes.liquidity_map || {})
+      setStopHunts(stopRes.stop_hunts || {})
+      setFinalSignal(finalRes.final_signal || {})
+      const hn = histN?.history || []
+      const hs = histS?.history || []
+      const merged = [...hn, ...hs].sort((a, b) => {
+        const ta = new Date(a.ts || 0).getTime()
+        const tb = new Date(b.ts || 0).getTime()
+        return tb - ta
+      })
+      setSignalHistoryRows(merged.slice(0, 120))
+      setError(null)
+    } catch (e) {
+      setError(e.message || 'Failed to fetch')
+    }
+  }
+
   useEffect(() => {
-    load()
-    const t = setInterval(load, 3000)
-    return () => clearInterval(t)
+    ;(async () => {
+      await Promise.all([loadFast(), loadSlow()])
+    })()
+    const tFast = setInterval(loadFast, POLL_FAST_MS)
+    const tSlow = setInterval(loadSlow, POLL_SLOW_MS)
+    return () => {
+      clearInterval(tFast)
+      clearInterval(tSlow)
+    }
   }, [])
 
   return (
@@ -1215,6 +1407,7 @@ export default function App() {
               const s = signals?.[symbol] || {}
               const scalping = resolveScalpingPayload(s)
               const aggregateSignal = getAggregateSignal(s, finalSignal?.[symbol], enginePlatform?.[symbol])
+              const aggregateEngines = getAggregateEnginesMeta(s, enginePlatform?.[symbol])
               return (
                 <ScalpingCard
                   key={symbol}
@@ -1223,6 +1416,7 @@ export default function App() {
                   heroZero={s?.hero_zero || []}
                   onPlaceOrder={placeOrder}
                   aggregateSignal={aggregateSignal}
+                  aggregateEngines={aggregateEngines}
                 />
               )
             })}

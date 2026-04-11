@@ -184,9 +184,9 @@ def _publish_waiting_signal_state(symbol: str, reason: str) -> None:
     }
 
 
-async def compute_for_symbol(symbol: str):
+def _compute_for_symbol_impl(symbol: str) -> None:
     """
-    High-performance live path:
+    High-performance live path (runs in a thread pool so FastAPI's event loop stays free):
       1) read latest Angel live price
       2) read fast in-memory option chain snapshot (no pandas)
       3) compute fast features
@@ -337,29 +337,62 @@ async def compute_for_symbol(symbol: str):
 
     strike_label: Optional[str] = None
     chain_ltp: Optional[float] = None
+    chain_ltp_age_sec: Optional[float] = None
     entry: Optional[float] = None
     target: Optional[float] = None
     stoploss: Optional[float] = None
 
-    if scalping_signal in ("BUY_CE", "BUY_PE"):
-        sel = option_chain_service.select_strike_for_scalp(chain_snapshot, float(price or 0.0), scalping_signal)
-        if sel:
-            s_val = sel["strike"]
-            side_leg = "CE" if scalping_signal == "BUY_CE" else "PE"
-            row = (
-                chain_snapshot.get(str(int(s_val)))
-                or chain_snapshot.get(str(s_val))
-                or {}
-            )
-            leg = row.get(side_leg) if isinstance(row, dict) else None
-            premium = option_chain_service.option_leg_last_price(leg) if leg else None
-            if premium is None:
-                premium = float(sel["premium"] or 0.0)
-            chain_ltp = round(float(premium), 4) if premium is not None else None
-            strike_label = f"{int(s_val)} {side_leg}"
-            entry = round(float(premium), 2)
-            target = round(premium * 1.4, 2)
-            stoploss = round(premium * 0.8, 2)
+    def _leg_levels_for_bias(
+        bias: str,
+    ) -> tuple[Optional[str], Optional[float], Optional[float], Optional[float], Optional[float], Optional[float]]:
+        b = str(bias or "").strip().upper()
+        if b not in ("BUY_CE", "BUY_PE"):
+            return None, None, None, None, None, None
+        sel = option_chain_service.select_strike_for_scalp(chain_snapshot, float(price or 0.0), b)
+        if not sel:
+            return None, None, None, None, None, None
+        s_val = sel["strike"]
+        side_leg = "CE" if b == "BUY_CE" else "PE"
+        row = option_chain_service.chain_row_for_strike(chain_snapshot, float(s_val))
+        leg = row.get(side_leg) if isinstance(row, dict) else None
+        premium = option_chain_service.option_leg_last_price(leg) if leg else None
+        if premium is None:
+            try:
+                premium = float(sel.get("premium") or 0.0)
+            except (TypeError, ValueError):
+                premium = None
+        if premium is None:
+            return None, None, None, None, None, None
+        prem_f = float(premium)
+        cltp = round(prem_f, 4)
+        slabel = f"{int(s_val)} {side_leg}"
+        ent = round(prem_f, 2)
+        leg_ts = leg.get("ts") if isinstance(leg, dict) else None
+        age_sec: Optional[float] = None
+        if leg_ts is not None:
+            try:
+                age_sec = round(max(0.0, time.time() - float(leg_ts)), 2)
+            except (TypeError, ValueError):
+                age_sec = None
+        return slabel, cltp, ent, round(prem_f * 1.4, 2), round(prem_f * 0.8, 2), age_sec
+
+    strike_label, chain_ltp, entry, target, stoploss, chain_ltp_age_sec = _leg_levels_for_bias(scalping_signal)
+
+    agg = platform.get("aggregate") or {}
+    agg_sig = str(agg.get("signal") or "NO_TRADE").strip().upper()
+    agg_strike, agg_ltp, agg_entry, agg_tgt, agg_sl, agg_ltp_age_sec = _leg_levels_for_bias(agg_sig)
+
+    aggregate_leg_fields: Dict[str, Any] = {}
+    if agg_sig in ("BUY_CE", "BUY_PE") and agg_strike:
+        aggregate_leg_fields = {
+            "aggregate_leg_signal": agg_sig,
+            "aggregate_leg_strike": agg_strike,
+            "aggregate_leg_chain_ltp": agg_ltp,
+            "aggregate_leg_chain_ltp_age_sec": agg_ltp_age_sec,
+            "aggregate_leg_entry": agg_entry,
+            "aggregate_leg_target": agg_tgt,
+            "aggregate_leg_stoploss": agg_sl,
+        }
 
     final_fast: Dict[str, Any] = {
         "symbol": symbol,
@@ -373,9 +406,11 @@ async def compute_for_symbol(symbol: str):
         "hero_zero": hero_zero,
         "strike": strike_label,
         "chain_ltp": chain_ltp,
+        "chain_ltp_age_sec": chain_ltp_age_sec,
         "entry": entry,
         "target": target,
         "stoploss": stoploss,
+        **aggregate_leg_fields,
         "price_source": price_source,
         "call_oi_strength": call_oi,
         "put_oi_strength": put_oi,
@@ -429,11 +464,14 @@ async def compute_for_symbol(symbol: str):
             "entry_decision": entry_decision,
             "decision_reason": decision_reason,
             "stable_count": stable_count,
+            "lock_remaining_sec": int(round(lock_remaining)),
             "strike": strike_label,
             "chain_ltp": chain_ltp,
+            "chain_ltp_age_sec": chain_ltp_age_sec,
             "entry": entry,
             "target": target,
             "stoploss": stoploss,
+            **aggregate_leg_fields,
         },
         "symbol": symbol,
         "price": float(price or 0.0),
@@ -508,8 +546,23 @@ async def compute_for_symbol(symbol: str):
         logger.info("[FAST SIGNAL] %s price=%s confidence=%s", scalping_signal, price, confidence)
 
 
+async def compute_for_symbol(symbol: str) -> None:
+    """Schedule one tick on the default executor; keeps HTTP/WebSocket responsive during heavy work."""
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, _compute_for_symbol_impl, symbol)
+
+
+def _live_tick_sleep_sec() -> float:
+    try:
+        s = float(os.getenv("LIVE_TICK_SLEEP_SEC", "0.25"))
+    except ValueError:
+        s = 0.25
+    return max(0.05, min(5.0, s))
+
 
 async def main_loop():
+    sleep_sec = _live_tick_sleep_sec()
+    logger.info("[LIVE] main loop tick interval=%.2fs (set LIVE_TICK_SLEEP_SEC to override)", sleep_sec)
     while True:
         for symbol in settings.indices:
             try:
@@ -518,7 +571,7 @@ async def main_loop():
                 logger.exception("Error in main loop for %s: %s", symbol, exc)
                 if symbol not in state.get("signals", {}):
                     _publish_waiting_signal_state(symbol, f"tick_error:{type(exc).__name__}")
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(sleep_sec)
 
 
 def _persist_option_ticks():
@@ -1003,15 +1056,24 @@ async def get_signal_history_endpoint(symbol: str = "NIFTY", limit: int = 50):
     return {"symbol": symbol, "history": history}
 
 
+def _ws_interval_sec(env_name: str, default: float) -> float:
+    try:
+        v = float(os.getenv(env_name, str(default)))
+    except ValueError:
+        v = default
+    return max(0.05, min(2.0, v))
+
+
 @app.websocket("/ws/signals")
 async def websocket_signals(ws: WebSocket):
     await ws.accept()
+    interval = _ws_interval_sec("WS_SIGNALS_PUSH_SEC", 0.25)
     try:
         while True:
             await ws.send_json({
                 "fast": state.get("fast_signals", {}),
             })
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(interval)
     except WebSocketDisconnect:
         logger.info("WebSocket client disconnected")
 
@@ -1027,6 +1089,7 @@ async def websocket_fast(ws: WebSocket):
     """
     await ws.accept()
     last_payload: Dict[str, Any] | None = None
+    interval = _ws_interval_sec("WS_FAST_PUSH_SEC", 0.2)
     try:
         while True:
             fast = state.get("fast_signals", {})
@@ -1046,7 +1109,7 @@ async def websocket_fast(ws: WebSocket):
             if slim != last_payload:
                 await ws.send_json(slim)
                 last_payload = slim
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(interval)
     except WebSocketDisconnect:
         logger.info("Fast WebSocket client disconnected")
 

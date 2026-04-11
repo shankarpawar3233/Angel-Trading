@@ -212,6 +212,7 @@ def _on_data(_wsapp: Any, message: Any) -> None:
                         "change_oi": coi,
                         "oi_change": coi,
                         "token": token,
+                        "ts": now,
                     }
                     option_chain_cache[under][sk][opt_type] = leg
                     _chain_update_prints += 1
