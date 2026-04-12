@@ -1199,12 +1199,20 @@ function ExecutionAlertStrip({ alerts }) {
             ? 'border-emerald-500/50 bg-emerald-500/10'
             : st === 'EXIT'
               ? 'border-amber-500/50 bg-amber-500/10'
-              : 'border-slate-600 bg-slate-900/50'
+              : st === 'NO_TRADE'
+                ? 'border-slate-500/60 bg-slate-800/40'
+                : 'border-slate-600 bg-slate-900/50'
+        const stage = a.stage != null && String(a.stage).trim() !== '' ? String(a.stage).toUpperCase() : null
         return (
           <div key={sym} className={`rounded-lg border p-3 font-mono text-sm ${border}`}>
             <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
               <span className="text-slate-500">{sym}</span>
               <span className="font-semibold text-white">{st}</span>
+              {stage ? (
+                <span className="text-xs uppercase tracking-wide text-violet-300/90 border border-violet-500/40 rounded px-1.5 py-0.5">
+                  {stage}
+                </span>
+              ) : null}
               <span className="text-cyan-300">{a.signal}</span>
               <span className="text-slate-400">{a.strike}</span>
             </div>

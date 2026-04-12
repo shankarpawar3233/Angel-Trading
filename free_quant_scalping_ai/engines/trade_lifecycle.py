@@ -7,12 +7,16 @@ State is stored in ``global_state["_execution_trade"][symbol]`` (plain dict, JSO
 
 from __future__ import annotations
 
+import json
 import os
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from app.services import option_chain_service
+
+_TRADE_ANALYTICS_PATH = Path(os.getenv("TRADE_ANALYTICS_FILE", "logs/trade_analytics.jsonl"))
 
 
 def _env_float(name: str, default: float) -> float:
@@ -57,6 +61,13 @@ def default_trade_state() -> Dict[str, Any]:
         "partial_50_done": False,
         "partial_70_done": False,
         "entry_index_price": None,
+        "entry_reason": None,
+        "last_exit_reason": None,
+        "max_pnl_seen": None,
+        "drawdown_max": None,
+        "_last_hold_emit_ts": 0.0,
+        "_last_no_trade_emit_ts": 0.0,
+        "_last_no_trade_reason": None,
     }
 
 
@@ -84,9 +95,11 @@ def _build_final_signal(
     pnl: Optional[float],
     confidence: Optional[float],
     reason: str,
+    stage: str = "ENTRY",
 ) -> Dict[str, Any]:
     return {
         "status": status,
+        "stage": stage,
         "symbol": symbol,
         "signal": signal,
         "strike": strike,
@@ -100,6 +113,28 @@ def _build_final_signal(
         "reason": reason,
         "time": datetime.now(timezone.utc).isoformat(),
     }
+
+
+def _seconds_since_entry(entry_iso: Optional[str]) -> float:
+    if not entry_iso:
+        return 1e9
+    try:
+        s = str(entry_iso).replace("Z", "+00:00")
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return max(0.0, (datetime.now(timezone.utc) - dt).total_seconds())
+    except (TypeError, ValueError):
+        return 1e9
+
+
+def _append_trade_analytics(row: Dict[str, Any]) -> None:
+    try:
+        _TRADE_ANALYTICS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with _TRADE_ANALYTICS_PATH.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(row, ensure_ascii=True, default=str) + "\n")
+    except OSError:
+        pass
 
 
 def _leg_ltp_and_age(
@@ -138,6 +173,14 @@ class ExecutionLifecycle:
         self.trail_pct = _env_float("EXEC_TRAILING_GIVEBACK_PCT", 0.35)
         self.partial_50_frac = _env_float("EXEC_PARTIAL_AT_50PCT", 0.30)
         self.partial_70_frac = _env_float("EXEC_PARTIAL_AT_70PCT", 0.30)
+        self.min_profit_to_trail = _env_float("EXEC_MIN_PROFIT_TO_TRAIL", 7.5)
+        self.rev_min_hold_sec = _env_float("EXEC_REVERSAL_MIN_HOLD_SEC", 15.0)
+        self.rev_inprofit_count_delta = _env_int("EXEC_REVERSAL_INPROFIT_COUNT_DELTA", 1)
+        self.rev_inprofit_conf_delta = _env_float("EXEC_REVERSAL_INPROFIT_CONF_DELTA", 5.0)
+        self.sl_reentry_conf_bump = _env_float("EXEC_SL_REENTRY_CONF_BUMP", 10.0)
+        self.hold_emit_interval = _env_float("EXEC_HOLD_SIGNAL_INTERVAL_SEC", 12.0)
+        self.hold_trail_eps = _env_float("EXEC_HOLD_TRAIL_CHANGE_EPS", 0.03)
+        self.no_trade_emit_interval = _env_float("EXEC_NO_TRADE_EMIT_INTERVAL_SEC", 20.0)
 
     def _store(self, state: Dict[str, Any], symbol: str, ts: Dict[str, Any]) -> None:
         state.setdefault("_execution_trade", {})[symbol] = ts
@@ -175,6 +218,8 @@ class ExecutionLifecycle:
         target: Optional[float],
         stoploss: Optional[float],
         chain_ltp_age_sec: Optional[float],
+        skip_entry_reason: Optional[str] = None,
+        entry_context_reason: Optional[str] = None,
     ) -> None:
         sym = symbol.upper()
         ts = self._get(state, sym)
@@ -199,14 +244,26 @@ class ExecutionLifecycle:
             if ltp > peak_f:
                 peak_f = ltp
                 ts["peak_ltp"] = peak_f
-            # Trailing: lock giveback from peak
-            trail_candidate = peak_f * (1.0 - self.trail_pct / 100.0) if peak_f > ent else sl
-            trail_sl_f = max(sl, trail_candidate, trail_sl_f)
+            unreal_pts = float(ltp) - float(ent)
+            # Trailing from peak only after minimum profit (premium points) is reached
+            if unreal_pts > self.min_profit_to_trail:
+                trail_candidate = peak_f * (1.0 - self.trail_pct / 100.0) if peak_f > ent else sl
+                trail_sl_f = max(sl, trail_candidate, trail_sl_f)
+            else:
+                trail_sl_f = float(sl)
             ts["trailing_sl"] = round(trail_sl_f, 4)
 
             rem = float(ts.get("remaining_fraction") or 1.0)
             qty = int(ts.get("qty") or 0)
-            ts["pnl"] = round((ltp - ent) * rem * max(1, qty), 4)
+            pnl_now = round((ltp - ent) * rem * max(1, qty), 4)
+            ts["pnl"] = pnl_now
+            mx = float(ts.get("max_pnl_seen") if ts.get("max_pnl_seen") is not None else pnl_now)
+            if pnl_now > mx:
+                mx = pnl_now
+            ts["max_pnl_seen"] = round(mx, 4)
+            dd = float(ts.get("drawdown_max") or 0.0)
+            dd = max(dd, mx - pnl_now)
+            ts["drawdown_max"] = round(dd, 4)
 
             # Hard SL (use trailing)
             if ltp <= trail_sl_f:
@@ -248,7 +305,6 @@ class ExecutionLifecycle:
             open_sig = str(ts.get("signal") or "").upper()
             fast = str(scalping_signal or "").upper()
             agg = str(aggregate_signal or "").upper()
-            same_side = fast == open_sig or agg == open_sig
             opp_side = _opposite_signal(open_sig, fast) or _opposite_signal(open_sig, agg)
             entry_idx = float(ts.get("entry_index_price") or index_price)
             if open_sig == "BUY_CE":
@@ -258,14 +314,20 @@ class ExecutionLifecycle:
             else:
                 idx_move_against = 0.0
 
+            hold_sec = _seconds_since_entry(ts.get("entry_time"))
+            hold_ok = hold_sec >= self.rev_min_hold_sec
+            in_profit = float(ltp) > float(ent)
+            need_rev = self.rev_count + (self.rev_inprofit_count_delta if in_profit else 0)
+            need_conf = self.rev_conf + (self.rev_inprofit_conf_delta if in_profit else 0.0)
+
             if open_sig and (fast == open_sig or agg == open_sig):
                 ts["opposite_signal_count"] = 0
-            elif opp_side:
+            elif opp_side and hold_ok:
                 opp_conf = float(aggregate_confidence) if _opposite_signal(open_sig, agg) else float(confidence)
-                if opp_conf >= self.rev_conf and idx_move_against >= self.rev_index_pts:
+                if opp_conf >= need_conf and idx_move_against >= self.rev_index_pts:
                     ts["opposite_signal_count"] = int(ts.get("opposite_signal_count") or 0) + 1
 
-            if int(ts.get("opposite_signal_count") or 0) >= self.rev_count:
+            if hold_ok and int(ts.get("opposite_signal_count") or 0) >= need_rev:
                 self._close(
                     state,
                     sym,
@@ -277,6 +339,27 @@ class ExecutionLifecycle:
                     index_price,
                 )
             else:
+                prev_tr = ts.get("_last_emit_trailing_sl")
+                now_t = time.time()
+                trail_changed = prev_tr is None or abs(float(prev_tr) - trail_sl_f) >= self.hold_trail_eps
+                if trail_changed or (now_t - float(ts.get("_last_hold_emit_ts") or 0.0)) >= self.hold_emit_interval:
+                    ts["_last_hold_emit_ts"] = now_t
+                    ts["_last_emit_trailing_sl"] = trail_sl_f
+                    final_bucket[sym] = _build_final_signal(
+                        status="CONFIRMED",
+                        stage="HOLD",
+                        symbol=sym,
+                        signal=open_sig or None,
+                        strike=str(ts.get("strike") or ""),
+                        entry=float(ent),
+                        ltp=float(ltp),
+                        target=float(tgt),
+                        sl=float(sl),
+                        trailing_sl=float(trail_sl_f),
+                        pnl=float(ts["pnl"]),
+                        confidence=float(confidence),
+                        reason="position_open",
+                    )
                 self._store(state, sym, ts)
             return
 
@@ -287,7 +370,11 @@ class ExecutionLifecycle:
         want = str(entry_decision or "").upper()
         if want not in ("BUY_CE", "BUY_PE"):
             return
-        if float(confidence or 0) < self.min_conf:
+
+        eff_min_conf = self.min_conf
+        if str(ts.get("last_exit_reason") or "") == "SL_OR_TRAIL":
+            eff_min_conf += self.sl_reentry_conf_bump
+        if float(confidence or 0) < eff_min_conf:
             return
         if strike_num is None or opt_type is None or entry is None or target is None or stoploss is None:
             return
@@ -304,8 +391,34 @@ class ExecutionLifecycle:
             if last_sig and last_sig != want:
                 return
 
+        if skip_entry_reason:
+            now_t = time.time()
+            last_r = ts.get("_last_no_trade_reason")
+            last_emit = float(ts.get("_last_no_trade_emit_ts") or 0.0)
+            if skip_entry_reason != last_r or (now_t - last_emit) >= self.no_trade_emit_interval:
+                ts["_last_no_trade_reason"] = skip_entry_reason
+                ts["_last_no_trade_emit_ts"] = now_t
+                self._store(state, sym, ts)
+                final_bucket[sym] = _build_final_signal(
+                    status="NO_TRADE",
+                    stage="ENTRY",
+                    symbol=sym,
+                    signal=want,
+                    strike=strike_label,
+                    entry=float(entry) if entry is not None else None,
+                    ltp=float(entry) if entry is not None else None,
+                    target=float(target) if target is not None else None,
+                    sl=float(stoploss) if stoploss is not None else None,
+                    trailing_sl=float(stoploss) if stoploss is not None else None,
+                    pnl=0.0,
+                    confidence=float(confidence),
+                    reason=skip_entry_reason,
+                )
+            return
+
         qty = self._qty_for_risk(float(entry), float(stoploss))
         now_iso = datetime.now(timezone.utc).isoformat()
+        er = str(entry_context_reason or "entry_confirmed")
         new_ts = default_trade_state()
         new_ts.update(
             {
@@ -327,11 +440,15 @@ class ExecutionLifecycle:
                 "remaining_fraction": 1.0,
                 "partial_booked": 0.0,
                 "opposite_signal_count": 0,
+                "entry_reason": er,
+                "max_pnl_seen": 0.0,
+                "drawdown_max": 0.0,
             }
         )
         self._store(state, sym, new_ts)
         final_bucket[sym] = _build_final_signal(
             status="CONFIRMED",
+            stage="ENTRY",
             symbol=sym,
             signal=want,
             strike=strike_label,
@@ -370,6 +487,7 @@ class ExecutionLifecycle:
         ts["last_exit_signal"] = str(ts.get("signal") or "")
         final_bucket[symbol] = _build_final_signal(
             status="EXIT",
+            stage="EXIT",
             symbol=symbol,
             signal=str(ts.get("signal") or ""),
             strike=str(ts.get("strike") or ""),
@@ -382,12 +500,29 @@ class ExecutionLifecycle:
             confidence=float(confidence),
             reason=reason,
         )
+        et = ts.get("entry_time")
+        xt = ts.get("exit_time")
+        dur = _seconds_since_entry(et) if et else None
+        _append_trade_analytics(
+            {
+                "symbol": symbol,
+                "entry_time": et,
+                "exit_time": xt,
+                "entry_reason": ts.get("entry_reason"),
+                "exit_reason": reason,
+                "pnl": round(float(pnl), 4),
+                "trade_duration_sec": round(float(dur), 3) if dur is not None else None,
+                "max_pnl": ts.get("max_pnl_seen"),
+                "drawdown": ts.get("drawdown_max"),
+            }
+        )
         # Reset to IDLE shell (keep last exit fields for re-entry)
         idle = default_trade_state()
         idle["status"] = "IDLE"
         idle["last_exit_underlying"] = ts["last_exit_underlying"]
         idle["last_exit_option_px"] = ts["last_exit_option_px"]
         idle["last_exit_signal"] = ts["last_exit_signal"]
+        idle["last_exit_reason"] = reason
         self._store(state, symbol, idle)
 
 

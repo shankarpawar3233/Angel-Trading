@@ -87,6 +87,38 @@ def _store_fast_signal_safe(symbol: str, ts: datetime, payload: Dict[str, Any]) 
         logger.debug("Failed to store fast signal for %s: %s", symbol, exc)
 
 
+def _execution_entry_skip_reason(sym_hist: List[float], price: float) -> Optional[str]:
+    """
+    Optional entry gates: tight index range (chop) and weak short-horizon momentum.
+    Returns a machine-readable reason string, or None when entry is not blocked by these gates.
+    """
+    if len(sym_hist) < 8:
+        return None
+    try:
+        min_move = float(os.getenv("EXEC_MIN_PRICE_MOVE", "2.5"))
+    except ValueError:
+        min_move = 2.5
+    try:
+        lookback = int(os.getenv("EXEC_NO_TRADE_RANGE_LOOKBACK", "20"))
+    except ValueError:
+        lookback = 20
+    try:
+        max_range = float(os.getenv("EXEC_NO_TRADE_MAX_INDEX_RANGE", "5.0"))
+    except ValueError:
+        max_range = 5.0
+    lookback = max(3, min(lookback, len(sym_hist)))
+    window = sym_hist[-lookback:]
+    hi = max(window)
+    lo = min(window)
+    if (hi - lo) < max_range:
+        return f"no_trade_choppy_range_{hi - lo:.2f}_lt_{max_range}"
+    if len(sym_hist) >= 6:
+        ref = sym_hist[-6]
+        if abs(float(price) - float(ref)) < min_move:
+            return f"no_trade_low_momentum_{abs(float(price) - float(ref)):.2f}_lt_{min_move}"
+    return None
+
+
 def _append_signal_record_safe(symbol: str, ts: datetime, payload: Dict[str, Any]) -> None:
     """Append compact signal events to a local JSONL file for debugging/audit."""
     try:
@@ -466,6 +498,7 @@ def _compute_for_symbol_impl(symbol: str) -> None:
         "CE" if str(scalping_signal).upper() == "BUY_CE" else "PE" if str(scalping_signal).upper() == "BUY_PE" else None
     )
     prev_alert = (state.get("execution_final_signal") or {}).get(symbol)
+    skip_entry = _execution_entry_skip_reason(sym_hist, float(price or 0.0))
     _execution_lifecycle.process_tick(
         state,
         symbol,
@@ -483,6 +516,8 @@ def _compute_for_symbol_impl(symbol: str) -> None:
         target=target,
         stoploss=stoploss,
         chain_ltp_age_sec=chain_ltp_age_sec,
+        skip_entry_reason=skip_entry,
+        entry_context_reason=decision_reason,
     )
     new_alert = (state.get("execution_final_signal") or {}).get(symbol)
     if new_alert and new_alert != prev_alert:
@@ -600,8 +635,9 @@ def _compute_for_symbol_impl(symbol: str) -> None:
 
 
 async def compute_for_symbol(symbol: str) -> None:
-    """Run live tick inline on the event loop (lower scheduling latency; may block HTTP briefly)."""
-    _compute_for_symbol_impl(symbol)
+    """Run live tick in a worker thread to keep the event loop responsive under load."""
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, _compute_for_symbol_impl, symbol)
 
 
 def _live_tick_sleep_sec() -> float:

@@ -48,11 +48,63 @@ def option_leg_last_price(leg: Any) -> Optional[float]:
     return None
 
 
+def _leg_float_field(leg: Dict[str, Any], keys: tuple[str, ...]) -> Optional[float]:
+    for key in keys:
+        raw = leg.get(key)
+        if raw is None:
+            continue
+        try:
+            v = float(raw)
+            if v > 0:
+                return v
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def option_leg_spread_pct(leg: Any) -> Optional[float]:
+    """Bid–ask as %% of mid when both sides exist; otherwise None (caller should not filter)."""
+    if not isinstance(leg, dict):
+        return None
+    bid = _leg_float_field(leg, ("bid", "bidprice", "bp", "buyPrice", "buy_price", "best_bid"))
+    ask = _leg_float_field(leg, ("ask", "askprice", "sp", "sellPrice", "sell_price", "best_ask", "offer"))
+    if bid is None or ask is None or ask <= bid:
+        return None
+    mid = 0.5 * (bid + ask)
+    if mid <= 0:
+        return None
+    return (ask - bid) / mid * 100.0
+
+
 def _env_float(name: str, default: float) -> float:
     try:
         return float(os.getenv(name, str(default)))
     except ValueError:
         return default
+
+
+def _strike_premium_floor() -> float:
+    soft = _env_float("STRIKE_PREMIUM_MIN", 30.0)
+    hard = _env_float("EXEC_HARD_MIN_PREMIUM", 10.0)
+    return max(soft, hard)
+
+
+def _max_spread_pct() -> float:
+    """0 disables spread-based strike rejection."""
+    try:
+        return float(os.getenv("EXEC_MAX_SPREAD_PCT", "0"))
+    except ValueError:
+        return 0.0
+
+
+def _leg_spread_rejects(leg: Any) -> bool:
+    cap = _max_spread_pct()
+    if cap <= 0:
+        return False
+    sp = option_leg_spread_pct(leg)
+    if sp is None:
+        return False
+    return sp > cap
 
 
 def select_strike_for_scalp(
@@ -69,7 +121,7 @@ def select_strike_for_scalp(
     side = "CE" if trade == "BUY_CE" else "PE" if trade == "BUY_PE" else None
     if side is None:
         return None
-    prem_min = _env_float("STRIKE_PREMIUM_MIN", 30.0)
+    prem_min = _strike_premium_floor()
     prem_max = _env_float("STRIKE_PREMIUM_MAX", 450.0)
     max_steps = int(_env_float("STRIKE_ATM_STEPS", 8.0))
 
@@ -104,6 +156,8 @@ def select_strike_for_scalp(
         if premium is None:
             continue
         if premium < prem_min or premium > prem_max:
+            continue
+        if _leg_spread_rejects(leg):
             continue
         vol = float(leg.get("volume") or 0.0)
         oi = float(leg.get("oi") or 0.0)
@@ -151,7 +205,7 @@ def select_strike_atm_window(
     side = "CE" if trade == "BUY_CE" else "PE" if trade == "BUY_PE" else None
     if side is None:
         return None
-    prem_min = _env_float("STRIKE_PREMIUM_MIN", 30.0)
+    prem_min = _strike_premium_floor()
     prem_max = _env_float("STRIKE_PREMIUM_MAX", 450.0)
     try:
         strikes = sorted(float(s) for s in chain.keys())
@@ -179,6 +233,8 @@ def select_strike_atm_window(
             continue
         premium = option_leg_last_price(leg)
         if premium is None or premium < prem_min or premium > prem_max:
+            continue
+        if _leg_spread_rejects(leg):
             continue
         vol = float(leg.get("volume") or 0.0)
         oi = float(leg.get("oi") or 0.0)
