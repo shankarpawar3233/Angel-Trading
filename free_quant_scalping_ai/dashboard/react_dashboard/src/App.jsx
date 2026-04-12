@@ -1186,6 +1186,46 @@ function DashboardGuideTable() {
   )
 }
 
+function ExecutionAlertStrip({ alerts }) {
+  const rows = Object.entries(alerts || {}).filter(([, v]) => v && v.status)
+  if (rows.length === 0) return null
+  return (
+    <section className="mb-4 space-y-2">
+      <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Execution engine (entry / exit)</h2>
+      {rows.map(([sym, a]) => {
+        const st = String(a.status || '').toUpperCase()
+        const border =
+          st === 'CONFIRMED'
+            ? 'border-emerald-500/50 bg-emerald-500/10'
+            : st === 'EXIT'
+              ? 'border-amber-500/50 bg-amber-500/10'
+              : 'border-slate-600 bg-slate-900/50'
+        return (
+          <div key={sym} className={`rounded-lg border p-3 font-mono text-sm ${border}`}>
+            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+              <span className="text-slate-500">{sym}</span>
+              <span className="font-semibold text-white">{st}</span>
+              <span className="text-cyan-300">{a.signal}</span>
+              <span className="text-slate-400">{a.strike}</span>
+            </div>
+            <div className="mt-1 text-xs text-slate-300 flex flex-wrap gap-x-4 gap-y-0.5">
+              <span>entry {a.entry ?? '–'}</span>
+              <span>ltp {a.ltp ?? '–'}</span>
+              <span className="text-emerald-400">tgt {a.target ?? '–'}</span>
+              <span className="text-red-400">sl {a.sl ?? '–'}</span>
+              <span>trail {a.trailing_sl ?? '–'}</span>
+              <span>pnl {a.pnl != null ? a.pnl : '–'}</span>
+              <span>conf {a.confidence != null ? `${Math.round(a.confidence)}%` : '–'}</span>
+            </div>
+            <div className="mt-1 text-[11px] text-slate-500 break-words">{a.reason}</div>
+            <div className="mt-0.5 text-[10px] text-slate-600">{a.time}</div>
+          </div>
+        )
+      })}
+    </section>
+  )
+}
+
 export default function App() {
   const [market, setMarket] = useState({})
   const [signals, setSignals] = useState({})
@@ -1202,6 +1242,7 @@ export default function App() {
   const [paperTrades, setPaperTrades] = useState({})
   const [signalHistoryRows, setSignalHistoryRows] = useState([])
   const [enginePlatform, setEnginePlatform] = useState({})
+  const [executionAlerts, setExecutionAlerts] = useState({})
   const symbolOrder = ['NIFTY', 'SENSEX']
   const signalEntries = Object.entries(signals || {})
   const hasFinalSignal = Object.keys(finalSignal || {}).length > 0
@@ -1314,6 +1355,7 @@ export default function App() {
       ])
       setMarket(marketRes.market || {})
       setSignals(signalsRes.signals || {})
+      setExecutionAlerts(signalsRes.execution_final_signal || {})
       setEnginePlatform(enginesRes.engine_platform || {})
       setWsHealth(wsHealthRes?.ws_health || {})
       setPaperTrades(paperRes?.paper_trades || {})
@@ -1399,6 +1441,8 @@ export default function App() {
             {error} — Is the backend running on port 8001?
           </div>
         )}
+
+        <ExecutionAlertStrip alerts={executionAlerts} />
 
         <section className="mb-8">
           <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Scalping signals</h2>

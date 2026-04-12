@@ -25,9 +25,10 @@ from data.data_storage import (
     store_signal,
 )
 from data.historical_fetcher import bootstrap_historical_data
-from app.services import option_chain_service, signal_engine
+from app.services import execution_broker, option_chain_service, signal_engine
 from app.services.websocket_service import get_feed_health_snapshot, get_index_ltp, get_option_chain_snapshot
 from engines.platform_runner import run_engine_tick
+from engines.trade_lifecycle import ExecutionLifecycle, parse_strike_label
 from training.daily_trainer import train_models
 from utils.file_logs import attach_error_file_handler
 from utils.logger import get_logger
@@ -63,7 +64,10 @@ state: Dict[str, Dict] = {
     "liquidity_map": {},
     "stop_hunts": {},
     "model_version": None,
+    "execution_final_signal": {},
 }
+
+_execution_lifecycle = ExecutionLifecycle()
 
 _scheduler: BackgroundScheduler | None = None
 _SIGNAL_LOG_PATH = Path(os.getenv("SIGNAL_RECORD_FILE", "logs/signal_events.jsonl"))
@@ -348,7 +352,24 @@ def _compute_for_symbol_impl(symbol: str) -> None:
         b = str(bias or "").strip().upper()
         if b not in ("BUY_CE", "BUY_PE"):
             return None, None, None, None, None, None
-        sel = option_chain_service.select_strike_for_scalp(chain_snapshot, float(price or 0.0), b)
+        use_win = os.getenv("EXEC_USE_ATM_WINDOW", "1").strip().lower() in ("1", "true", "yes")
+        prev_map = (state.get("_leg_ltp_history") or {}).get(symbol) or {}
+        try:
+            back = int(os.getenv("EXEC_ATM_STEPS_BACK", "5"))
+            fwd = int(os.getenv("EXEC_ATM_STEPS_FWD", "2"))
+        except ValueError:
+            back, fwd = 5, 2
+        if use_win:
+            sel = option_chain_service.select_strike_atm_window(
+                chain_snapshot,
+                float(price or 0.0),
+                b,
+                atm_steps_back=back,
+                atm_steps_fwd=fwd,
+                ltp_prev_map=prev_map if isinstance(prev_map, dict) else None,
+            )
+        else:
+            sel = option_chain_service.select_strike_for_scalp(chain_snapshot, float(price or 0.0), b)
         if not sel:
             return None, None, None, None, None, None
         s_val = sel["strike"]
@@ -364,6 +385,8 @@ def _compute_for_symbol_impl(symbol: str) -> None:
         if premium is None:
             return None, None, None, None, None, None
         prem_f = float(premium)
+        hist = state.setdefault("_leg_ltp_history", {}).setdefault(symbol, {})
+        hist[f"{int(s_val)}_{side_leg}"] = prem_f
         cltp = round(prem_f, 4)
         slabel = f"{int(s_val)} {side_leg}"
         ent = round(prem_f, 2)
@@ -437,6 +460,34 @@ def _compute_for_symbol_impl(symbol: str) -> None:
             },
         )
 
+    agg_conf_f = float((agg.get("confidence") or 0.0))
+    strike_num_parsed, opt_parsed = parse_strike_label(strike_label)
+    opt_for_exec = opt_parsed or (
+        "CE" if str(scalping_signal).upper() == "BUY_CE" else "PE" if str(scalping_signal).upper() == "BUY_PE" else None
+    )
+    prev_alert = (state.get("execution_final_signal") or {}).get(symbol)
+    _execution_lifecycle.process_tick(
+        state,
+        symbol,
+        index_price=float(price or 0.0),
+        chain_snapshot=chain_snapshot,
+        scalping_signal=str(scalping_signal),
+        entry_decision=str(entry_decision),
+        confidence=float(confidence),
+        aggregate_signal=str(agg_sig),
+        aggregate_confidence=agg_conf_f,
+        strike_label=strike_label,
+        strike_num=strike_num_parsed,
+        opt_type=opt_for_exec,
+        entry=entry,
+        target=target,
+        stoploss=stoploss,
+        chain_ltp_age_sec=chain_ltp_age_sec,
+    )
+    new_alert = (state.get("execution_final_signal") or {}).get(symbol)
+    if new_alert and new_alert != prev_alert:
+        execution_broker.dispatch_execution_event(symbol, new_alert)
+
     paper_trader.process_tick(symbol, final_fast, chain_snapshot, state)
 
     ts = datetime.now(timezone.utc)
@@ -476,6 +527,8 @@ def _compute_for_symbol_impl(symbol: str) -> None:
         "symbol": symbol,
         "price": float(price or 0.0),
         "engine_platform": ep,
+        "execution_position": (state.get("_execution_trade") or {}).get(symbol),
+        "execution_alert": (state.get("execution_final_signal") or {}).get(symbol),
     }
 
     # Backwards-compatible minimal final_signal for existing UI (trade/hero_zero/confidence)
@@ -547,9 +600,8 @@ def _compute_for_symbol_impl(symbol: str) -> None:
 
 
 async def compute_for_symbol(symbol: str) -> None:
-    """Schedule one tick on the default executor; keeps HTTP/WebSocket responsive during heavy work."""
-    loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, _compute_for_symbol_impl, symbol)
+    """Run live tick inline on the event loop (lower scheduling latency; may block HTTP briefly)."""
+    _compute_for_symbol_impl(symbol)
 
 
 def _live_tick_sleep_sec() -> float:
@@ -738,6 +790,8 @@ async def get_signals():
     return {
         "signals": state["signals"],
         "model_version": state.get("model_version"),
+        "execution_final_signal": state.get("execution_final_signal") or {},
+        "execution_positions": state.get("_execution_trade") or {},
     }
 
 
