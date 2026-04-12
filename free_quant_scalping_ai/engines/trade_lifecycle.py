@@ -199,6 +199,18 @@ class ExecutionLifecycle:
         q = int(risk_amt / per_unit)
         return max(1, min(q, _env_int("EXEC_MAX_QTY", 500)))
 
+    @staticmethod
+    def _maybe_telegram_execution(state: Dict[str, Any], sym: str) -> None:
+        """Non-trading Telegram hook; must never affect lifecycle."""
+        try:
+            from app.services.telegram_execution_notify import on_final_signal_updated
+
+            pl = (state.get("execution_final_signal") or {}).get(sym)
+            if isinstance(pl, dict):
+                on_final_signal_updated(state, sym, pl)
+        except Exception:
+            pass
+
     def process_tick(
         self,
         state: Dict[str, Any],
@@ -360,6 +372,7 @@ class ExecutionLifecycle:
                         confidence=float(confidence),
                         reason="position_open",
                     )
+                    self._maybe_telegram_execution(state, sym)
                 self._store(state, sym, ts)
             return
 
@@ -414,6 +427,7 @@ class ExecutionLifecycle:
                     confidence=float(confidence),
                     reason=skip_entry_reason,
                 )
+                self._maybe_telegram_execution(state, sym)
             return
 
         qty = self._qty_for_risk(float(entry), float(stoploss))
@@ -461,6 +475,7 @@ class ExecutionLifecycle:
             confidence=float(confidence),
             reason="entry_confirmed",
         )
+        self._maybe_telegram_execution(state, sym)
 
     def _close(
         self,
@@ -500,6 +515,7 @@ class ExecutionLifecycle:
             confidence=float(confidence),
             reason=reason,
         )
+        self._maybe_telegram_execution(state, str(symbol).upper())
         et = ts.get("entry_time")
         xt = ts.get("exit_time")
         dur = _seconds_since_entry(et) if et else None

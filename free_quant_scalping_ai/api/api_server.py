@@ -790,6 +790,12 @@ async def startup_event():
 
     asyncio.create_task(main_loop())
     logger.info("API server ready. Docs: http://localhost:8000/docs")
+    try:
+        from app.services.telegram_execution_notify import send_startup_telegram_sync
+
+        await loop.run_in_executor(None, send_startup_telegram_sync)
+    except Exception as exc:
+        logger.warning("Telegram startup notify skipped: %s", exc)
 
 
 @app.get("/candles")

@@ -1,11 +1,16 @@
 from pathlib import Path
 from typing import Literal
 
+from dotenv import load_dotenv
 from pydantic import Field
 from pydantic_settings import BaseSettings
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+# pydantic-settings reads .env only for declared fields; load_dotenv exposes all keys to os.getenv
+# (e.g. TELEGRAM_BOT_TOKEN) used by optional integrations.
+load_dotenv(PROJECT_ROOT / ".env", override=False)
+
 DATA_DIR = PROJECT_ROOT / "storage"
 DB_PATH = DATA_DIR / "market_data.sqlite"
 LOG_DIR = DATA_DIR / "logs"
