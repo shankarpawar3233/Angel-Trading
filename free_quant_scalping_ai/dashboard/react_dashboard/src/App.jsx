@@ -791,7 +791,7 @@ function PaperTradesPanel({ paperTrades, onResetPaper }) {
         <div className="rounded border border-slate-700 p-2"><div className="text-slate-500">Wins</div><div className="text-emerald-400">{stats.wins ?? 0}</div></div>
         <div className="rounded border border-slate-700 p-2"><div className="text-slate-500">Losses</div><div className="text-red-400">{stats.losses ?? 0}</div></div>
         <div className="rounded border border-slate-700 p-2 lg:col-span-1">
-          <div className="text-slate-500">Total PnL (prem pts)</div>
+          <div className="text-slate-500">Total PnL (× lots)</div>
           <div className={totalPnl >= 0 ? 'text-emerald-400 font-semibold' : 'text-red-400 font-semibold'}>
             {stats.total_pnl != null ? Number(stats.total_pnl).toFixed(2) : '0.00'}
           </div>
@@ -821,6 +821,11 @@ function PaperTradesPanel({ paperTrades, onResetPaper }) {
                   <span className="text-slate-500">PnL live</span>
                   <span className={Number(a.pnl_live) >= 0 ? 'text-emerald-400' : 'text-red-400'}>{a.pnl_live != null ? Number(a.pnl_live).toFixed(2) : '–'}</span>
                   <span className="text-slate-500">PnL %</span><span className="text-slate-200">{a.pnl_percent != null ? `${Number(a.pnl_percent).toFixed(2)}%` : '–'}</span>
+                  <span className="text-slate-500">Lots</span><span className="text-slate-200">{a.lots != null ? String(a.lots) : '–'}</span>
+                  <span className="text-slate-500">Entry time (UTC)</span>
+                  <span className="text-slate-300 break-all">{a.entry_time_iso || '–'}</span>
+                  <span className="text-slate-500">Trade age</span>
+                  <span className="text-slate-200">{a.trade_age_sec != null ? `${Number(a.trade_age_sec).toFixed(1)} s` : '–'}</span>
                   <span className="text-slate-500">Dist target</span><span className="text-slate-200">{a.distance_to_target != null ? Number(a.distance_to_target).toFixed(2) : '–'}</span>
                   <span className="text-slate-500">Dist SL</span><span className="text-slate-200">{a.distance_to_sl != null ? Number(a.distance_to_sl).toFixed(2) : '–'}</span>
                 </div>
@@ -895,6 +900,28 @@ function PaperTradesPanel({ paperTrades, onResetPaper }) {
                 <div className="text-slate-500 text-xs mb-0.5">PnL</div>
                 <div className={Number(lastTrade.pnl) >= 0 ? 'text-emerald-400 font-semibold' : 'text-red-400 font-semibold'}>
                   {lastTrade.pnl != null ? Number(lastTrade.pnl).toFixed(2) : '–'}
+                </div>
+              </div>
+              <div>
+                <div className="text-slate-500 text-xs mb-0.5">Lots</div>
+                <div className="text-slate-200">{lastTrade.lots != null ? String(lastTrade.lots) : '–'}</div>
+              </div>
+              <div>
+                <div className="text-slate-500 text-xs mb-0.5">PnL / lot</div>
+                <div className="text-slate-300">{lastTrade.pnl_per_lot != null ? Number(lastTrade.pnl_per_lot).toFixed(2) : '–'}</div>
+              </div>
+              <div className="sm:col-span-2">
+                <div className="text-slate-500 text-xs mb-0.5">Entry time (UTC)</div>
+                <div className="text-slate-300 text-xs break-all">{lastTrade.entry_time || '–'}</div>
+              </div>
+              <div className="sm:col-span-2">
+                <div className="text-slate-500 text-xs mb-0.5">Exit time (UTC)</div>
+                <div className="text-slate-300 text-xs break-all">{lastTrade.exit_time || '–'}</div>
+              </div>
+              <div>
+                <div className="text-slate-500 text-xs mb-0.5">Trade age</div>
+                <div className="text-slate-200">
+                  {lastTrade.trade_age_sec != null ? `${Number(lastTrade.trade_age_sec).toFixed(1)} s` : '–'}
                 </div>
               </div>
             </div>

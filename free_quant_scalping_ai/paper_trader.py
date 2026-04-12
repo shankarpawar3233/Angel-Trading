@@ -1,6 +1,14 @@
 """
-Aggregate-gated paper trading: opens only when platform aggregate + risk allow,
-logs to logs/paper_trades.jsonl, exposes active / stats for the dashboard API.
+Paper trading mirrors ``ExecutionLifecycle`` (``_execution_trade`` + ``execution_final_signal``).
+
+No independent strike/SL/target logic: entries follow execution CONFIRMED/OPEN, exits follow
+EXIT / IDLE-after-close, PnL and trail/partials/reversal match the execution engine (scaled by
+``PAPER_LOTS_PER_TRADE`` vs execution ``qty``).
+
+Env:
+  PAPER_USE_EXECUTION_ENGINE — default ``1`` (mirror). Set ``0`` to disable paper updates.
+  PAPER_SYMBOLS — default ``NIFTY`` (comma list or ``*``).
+  PAPER_LOTS_PER_TRADE / PAPER_MAX_LOTS — scale logged PnL vs execution qty.
 """
 
 from __future__ import annotations
@@ -10,9 +18,8 @@ import os
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, FrozenSet, Optional
 
-from app.services import option_chain_service
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -24,7 +31,37 @@ def _utc_now_iso() -> str:
     from datetime import datetime, timezone
 
     return datetime.now(timezone.utc).isoformat()
-_MIN_AGG_CONF = float(os.getenv("PAPER_AGG_MIN_CONF", "65"))
+
+
+def _paper_symbols() -> FrozenSet[str]:
+    raw = os.getenv("PAPER_SYMBOLS", "NIFTY").strip().upper()
+    if not raw or raw == "*":
+        return frozenset({"NIFTY", "SENSEX"})
+    return frozenset(s.strip().upper() for s in raw.split(",") if s.strip())
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
+
+def _paper_lots() -> int:
+    want = _env_int("PAPER_LOTS_PER_TRADE", 20)
+    cap = _env_int("PAPER_MAX_LOTS", 20)
+    return max(1, min(want, cap))
+
+
+def _use_execution_mirror() -> bool:
+    return os.getenv("PAPER_USE_EXECUTION_ENGINE", "1").strip().lower() in ("1", "true", "yes")
+
+
+def _pnl_scale(exec_qty: int, paper_lots: int) -> float:
+    q = max(1, int(exec_qty))
+    return float(max(1, paper_lots)) / float(q)
+
+
 _BOOTSTRAP_KEY = "_paper_trades_bootstrapped"
 
 
@@ -40,33 +77,17 @@ def _default_paper_state() -> Dict[str, Any]:
         },
         "last_trade": None,
         "guide": {
-            "entry": "Open when aggregate.signal is BUY_CE/BUY_PE, confidence >= 65, risk.passed (not blocked).",
-            "exit": "Target hit or stop-loss hit.",
+            "mode": "execution_mirror",
+            "PAPER_USE_EXECUTION_ENGINE": "1",
+            "symbols": ",".join(sorted(_paper_symbols())),
+            "source": "state['_execution_trade'] + state['execution_final_signal']",
+            "exit": "Same as execution: SL_OR_TRAIL, TARGET, REVERSAL (trailing + partials in engine).",
+            "lots_per_trade": _paper_lots(),
+            "max_lots": _env_int("PAPER_MAX_LOTS", 20),
+            "pnl_scale": "paper_pnl = execution_pnl * (PAPER_LOTS_PER_TRADE / max(exec_qty,1))",
             "log": str(_PAPER_LOG),
         },
     }
-
-
-def _risk_passed(risk: Any) -> bool:
-    if not isinstance(risk, dict):
-        return False
-    if "passed" in risk:
-        return bool(risk.get("passed"))
-    return not bool(risk.get("blocked"))
-
-
-def _leg_ltp(chain: Any, strike: float, opt: str) -> float:
-    if not chain or not isinstance(chain, dict):
-        return 0.0
-    for key in (str(int(round(strike))), str(round(strike, 2)), str(strike)):
-        row = chain.get(key)
-        if not isinstance(row, dict):
-            continue
-        leg = row.get(opt)
-        if isinstance(leg, dict):
-            p = option_chain_service.option_leg_last_price(leg)
-            return float(p or 0.0)
-    return 0.0
 
 
 def _append_jsonl(row: Dict[str, Any]) -> None:
@@ -165,27 +186,37 @@ def reset_paper_trades(state: Dict[str, Any]) -> Dict[str, Any]:
     return state.get("paper_trades") or _default_paper_state()
 
 
-def _close_trade(
+def _result_for_exit_reason(reason: str, pnl: float) -> str:
+    r = str(reason or "").upper()
+    if r == "TARGET":
+        return "FULL_TARGET"
+    if r in ("SL_OR_TRAIL", "SL"):
+        return "LOSS" if pnl < 0 else "BREAKEVEN"
+    if r == "REVERSAL":
+        return "REVERSAL"
+    return r or "CLOSE"
+
+
+def _close_mirror_trade(
     state: Dict[str, Any],
     symbol: str,
     pos: Dict[str, Any],
     exit_prem: float,
-    reason: str,
+    exec_reason: str,
     index_price: float,
-    aggregate_signal: str,
+    exit_signal: str,
+    exec_pnl: float,
+    exit_time_iso: str,
+    trade_age_sec: float,
 ) -> None:
     pt = state.setdefault("paper_trades", _default_paper_state())
-    entry = float(pos.get("entry") or 0.0)
-    pnl = round(exit_prem - entry, 4)
+    entry = float(pos.get("entry_price") or pos.get("entry") or 0.0)
+    lots = max(1, int(pos.get("lots") or 1))
+    pnl = round(float(exec_pnl), 4)
+    per_unit = round(pnl / max(lots, 1), 6) if lots else round(exit_prem - entry, 6)
+
     sig = str(pos.get("signal") or "")
-    if reason == "TARGET":
-        result = "FULL_TARGET"
-    elif reason == "SL":
-        result = "LOSS"
-    elif reason == "REVERSE":
-        result = "REVERSAL"
-    else:
-        result = str(reason)
+    result = _result_for_exit_reason(exec_reason, pnl)
 
     win = pnl > 0
     loss = pnl < 0
@@ -205,17 +236,27 @@ def _close_trade(
         "trade_id": trade_id,
         "symbol": symbol,
         "signal": sig,
+        "signal_source": "execution_mirror",
         "strike": pos.get("strike_label"),
         "leg": leg,
         "type": pos.get("opt"),
+        "lots": lots,
+        "exec_qty": pos.get("exec_qty"),
         "entry": entry,
-        "exit": round(exit_prem, 4),
+        "exit": round(float(exit_prem), 4),
         "pnl": pnl,
+        "pnl_per_lot": round(pnl / max(lots, 1), 4),
         "result": result,
-        "exit_reason": reason,
+        "exit_reason": exec_reason,
+        "entry_time": pos.get("entry_time_iso"),
+        "exit_time": exit_time_iso,
+        "trade_age_sec": trade_age_sec,
         "closed_at": time.time(),
-        "aggregate_signal_at_exit": aggregate_signal,
+        "signal_at_exit": exit_signal,
+        "aggregate_signal_at_exit": exit_signal,
         "index_price_at_exit": index_price,
+        "remaining_fraction_at_exit": pos.get("remaining_fraction"),
+        "trailing_sl_at_exit": pos.get("trailing_sl"),
     }
     pt["last_trade"] = closed
     del pt["active"][symbol]
@@ -223,165 +264,262 @@ def _close_trade(
     _append_jsonl(
         {
             "event": "close",
-            "ts": _utc_now_iso(),
+            "ts": exit_time_iso,
             "symbol": symbol,
             "trade_id": trade_id,
             "entry": entry,
-            "exit": round(exit_prem, 4),
+            "exit": round(float(exit_prem), 4),
+            "lots": lots,
+            "exec_qty": pos.get("exec_qty"),
             "pnl": pnl,
+            "pnl_per_lot": closed["pnl_per_lot"],
             "result": result,
-            "reason": reason,
+            "reason": exec_reason,
             "signal": sig,
+            "signal_source": "execution_mirror",
+            "signal_at_exit": exit_signal,
+            "entry_time": pos.get("entry_time_iso"),
+            "exit_time": exit_time_iso,
+            "trade_duration_sec": trade_age_sec,
+            "trade_age_sec": trade_age_sec,
         }
     )
-    logger.info("[PAPER] CLOSE %s %s pnl=%s reason=%s", symbol, sig, pnl, reason)
+    logger.info("[PAPER] CLOSE(mirror) %s %s pnl=%s reason=%s", symbol, sig, pnl, exec_reason)
 
 
-def _maybe_open(
+def _execution_bucket(state: Dict[str, Any]) -> Dict[str, Any]:
+    return state.setdefault("_execution_trade", {})
+
+
+def _final_bucket(state: Dict[str, Any]) -> Dict[str, Any]:
+    return state.setdefault("execution_final_signal", {})
+
+
+def _open_mirror_from_execution(
     state: Dict[str, Any],
     symbol: str,
-    final_fast: Dict[str, Any],
-    chain_snapshot: Any,
-    aggregate: Dict[str, Any],
-    risk: Any,
+    ex: Dict[str, Any],
+    efs: Optional[Dict[str, Any]],
 ) -> None:
     pt = state.setdefault("paper_trades", _default_paper_state())
     if symbol in (pt.get("active") or {}):
         return
-
-    sig = str(aggregate.get("signal") or "NO_TRADE").upper()
-    if sig not in ("BUY_CE", "BUY_PE"):
-        return
-    try:
-        conf = float(aggregate.get("confidence") or 0.0)
-    except (TypeError, ValueError):
-        conf = 0.0
-    if conf < _MIN_AGG_CONF:
-        return
-    if not _risk_passed(risk):
+    if str(ex.get("status") or "").upper() != "OPEN":
         return
 
-    price = float(final_fast.get("price") or 0.0)
-    sel = option_chain_service.select_strike_for_scalp(chain_snapshot, price, sig)
-    if not sel:
-        return
-    strike = float(sel["strike"])
-    opt = str(sel.get("type") or ("CE" if sig == "BUY_CE" else "PE"))
-    row = (
-        chain_snapshot.get(str(int(strike)))
-        or chain_snapshot.get(str(strike))
-        or {}
-    )
-    leg = row.get(opt) if isinstance(row, dict) else None
-    prem = option_chain_service.option_leg_last_price(leg) if leg else None
-    if prem is None:
-        prem = float(sel.get("premium") or 0.0)
-    if prem <= 0:
-        return
-    entry = round(float(prem), 2)
-    target = round(prem * 1.4, 2)
-    stoploss = round(prem * 0.8, 2)
+    lots = _paper_lots()
+    qty = int(ex.get("qty") or 1)
+    scale = _pnl_scale(qty, lots)
+    entry_t = ex.get("entry_time")
+    entry_iso = str(entry_t) if entry_t else _utc_now_iso()
+    strike_label = str(ex.get("strike") or "")
+    opt = str(ex.get("opt_type") or "CE").upper()
+    sn = ex.get("strike_num")
     trade_id = f"{symbol}_{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}"
-    strike_label = f"{int(strike)} {opt}"
 
-    pos = {
+    pos: Dict[str, Any] = {
         "trade_id": trade_id,
-        "signal": sig,
+        "mirror_execution": True,
+        "signal": str(ex.get("signal") or ""),
+        "signal_source": "execution_mirror",
         "opt": opt,
-        "strike": strike,
+        "strike": float(sn) if sn is not None else None,
         "strike_label": strike_label,
-        "leg": f"{symbol} {strike_label}",
-        "entry": entry,
-        "target": target,
-        "stoploss": stoploss,
+        "leg": f"{symbol} {strike_label}".strip(),
+        "entry_price": float(ex.get("entry_price") or 0.0),
+        "entry": float(ex.get("entry_price") or 0.0),
+        "target": float(ex.get("target") or 0.0),
+        "sl": float(ex.get("sl") or 0.0),
+        "trailing_sl": float(ex.get("trailing_sl") or ex.get("sl") or 0.0),
+        "lots": lots,
+        "exec_qty": qty,
+        "pnl_scale": scale,
         "opened_at": time.time(),
-        "open_confidence": conf,
+        "entry_time_iso": entry_iso,
+        "exec_entry_time": entry_t,
+        "open_confidence": float((efs or {}).get("confidence") or 0.0),
+        "remaining_fraction": float(ex.get("remaining_fraction") or 1.0),
+        "partial_booked": float(ex.get("partial_booked") or 0.0),
     }
     pt.setdefault("active", {})[symbol] = pos
     _append_jsonl(
         {
             "event": "open",
-            "ts": _utc_now_iso(),
+            "ts": entry_iso,
             "symbol": symbol,
             "trade_id": trade_id,
-            "signal": sig,
+            "signal": pos["signal"],
+            "signal_source": "execution_mirror",
             "strike": strike_label,
-            "entry": entry,
-            "target": target,
-            "stoploss": stoploss,
-            "aggregate_confidence": conf,
-            "risk_passed": True,
+            "entry": pos["entry"],
+            "target": pos["target"],
+            "sl": pos["sl"],
+            "trailing_sl": pos["trailing_sl"],
+            "lots": lots,
+            "exec_qty": qty,
+            "entry_time": entry_iso,
+            "confidence": pos["open_confidence"],
         }
     )
-    logger.info("[PAPER] OPEN %s %s @ %s tgt=%s sl=%s conf=%s", symbol, strike_label, entry, target, stoploss, conf)
+    logger.info("[PAPER] OPEN(mirror) %s %s exec_qty=%s paper_lots=%s", symbol, strike_label, qty, lots)
 
 
-def _update_active_position(
+def _sync_mirror_open(state: Dict[str, Any], symbol: str, pos: Dict[str, Any], ex: Dict[str, Any]) -> None:
+    """Refresh paper active row from execution OPEN state (trail, partials, pnl)."""
+    pt = state["paper_trades"]
+    scale = float(pos.get("pnl_scale") or 1.0)
+    exec_pnl = float(ex.get("pnl") or 0.0)
+    paper_pnl = round(exec_pnl * scale, 4)
+    ent = float(ex.get("entry_price") or 0.0)
+    cur = float(ex.get("current_price") or ent)
+    opened = float(pos.get("opened_at") or time.time())
+    trade_age_sec = round(time.time() - opened, 3)
+    tgt = float(ex.get("target") or 0.0)
+    tsl = float(ex.get("trailing_sl") or ex.get("sl") or 0.0)
+    rem = float(ex.get("remaining_fraction") or 1.0)
+
+    pt["active"][symbol] = {
+        **pos,
+        "entry_price": ent,
+        "entry": ent,
+        "current_price": cur,
+        "target": tgt,
+        "sl": float(ex.get("sl") or 0.0),
+        "trailing_sl": tsl,
+        "remaining_fraction": rem,
+        "partial_booked": float(ex.get("partial_booked") or 0.0),
+        "opposite_signal_count": int(ex.get("opposite_signal_count") or 0),
+        "exec_pnl": exec_pnl,
+        "pnl_live": paper_pnl,
+        "pnl_percent": round(((cur - ent) / ent) * 100.0, 2) if ent > 0 else 0.0,
+        "trade_age_sec": trade_age_sec,
+        "last_prem": round(cur, 4),
+        "distance_to_target": round(tgt - cur, 4) if tgt else None,
+        "distance_to_sl": round(cur - tsl, 4) if tsl else None,
+    }
+
+
+def _try_close_mirror(
     state: Dict[str, Any],
     symbol: str,
     pos: Dict[str, Any],
-    chain_snapshot: Any,
-    final_fast: Dict[str, Any],
-    aggregate: Dict[str, Any],
+    ex: Dict[str, Any],
+    efs: Optional[Dict[str, Any]],
+    index_price: float,
+    fast_signal: str,
 ) -> bool:
-    """Returns True if position was closed this call."""
-    price = float(final_fast.get("price") or 0.0)
-    strike = float(pos.get("strike") or 0.0)
-    opt = str(pos.get("opt") or "CE")
-    entry = float(pos.get("entry") or 0.0)
-    target = float(pos.get("target") or 0.0)
-    stoploss = float(pos.get("stoploss") or 0.0)
-    ltp = _leg_ltp(chain_snapshot, strike, opt)
-    if ltp <= 0:
-        ltp = entry
+    """Close paper when execution has left OPEN (same tick EXIT or subsequent IDLE + last_exit)."""
+    st_ex = str(ex.get("status") or "").upper()
+    if st_ex == "OPEN":
+        return False
 
-    agg_sig = str(aggregate.get("signal") or "NO_TRADE").upper()
-    if ltp <= stoploss:
-        _close_trade(state, symbol, pos, ltp, "SL", price, agg_sig)
-        return True
-    if ltp >= target:
-        _close_trade(state, symbol, pos, ltp, "TARGET", price, agg_sig)
-        return True
+    exit_from_final = isinstance(efs, dict) and str(efs.get("status") or "").upper() == "EXIT"
+    if not exit_from_final and not ex.get("last_exit_reason"):
+        return False
 
-    pt = state["paper_trades"]
-    pnl_live = round(ltp - entry, 4)
-    pnl_pct = round((pnl_live / entry) * 100.0, 2) if entry > 0 else 0.0
-    pt["active"][symbol] = {
-        **pos,
-        "index_price": price,
-        "last_prem": round(ltp, 4),
-        "pnl_live": pnl_live,
-        "pnl_percent": pnl_pct,
-        "distance_to_target": round(target - ltp, 4),
-        "distance_to_sl": round(ltp - stoploss, 4),
-    }
-    return False
+    exit_reason = str(ex.get("last_exit_reason") or "")
+    exit_px = ex.get("last_exit_option_px")
+    exit_time_iso = _utc_now_iso()
+    exec_pnl_scaled: Optional[float] = None
+
+    if isinstance(efs, dict) and str(efs.get("status") or "").upper() == "EXIT":
+        try:
+            exit_px = float(efs.get("ltp") if efs.get("ltp") is not None else exit_px)
+        except (TypeError, ValueError):
+            pass
+        exit_reason = str(efs.get("reason") or exit_reason)
+        t = efs.get("time")
+        if t:
+            exit_time_iso = str(t)
+        try:
+            raw_pnl = float(efs.get("pnl") or 0.0)
+            scale = float(pos.get("pnl_scale") or 1.0)
+            exec_pnl_scaled = round(raw_pnl * scale, 4)
+        except (TypeError, ValueError):
+            exec_pnl_scaled = None
+
+    if exit_px is None:
+        try:
+            exit_px = float(pos.get("current_price") or pos.get("entry_price") or 0.0)
+        except (TypeError, ValueError):
+            exit_px = 0.0
+    else:
+        try:
+            exit_px = float(exit_px)
+        except (TypeError, ValueError):
+            exit_px = float(pos.get("current_price") or 0.0)
+
+    if exec_pnl_scaled is None:
+        ent = float(pos.get("entry_price") or 0.0)
+        rem = float(pos.get("remaining_fraction") or 1.0)
+        qty = max(1, int(pos.get("exec_qty") or 1))
+        scale = float(pos.get("pnl_scale") or 1.0)
+        raw_exec = (float(exit_px) - ent) * rem * float(qty)
+        exec_pnl_scaled = round(raw_exec * scale, 4)
+
+    opened = float(pos.get("opened_at") or time.time())
+    trade_age_sec = round(time.time() - opened, 3)
+    try:
+        et = pos.get("entry_time_iso")
+        if et:
+            from datetime import datetime, timezone
+
+            dt = datetime.fromisoformat(str(et).replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            trade_age_sec = round((datetime.now(timezone.utc) - dt).total_seconds(), 3)
+    except (TypeError, ValueError):
+        pass
+
+    _close_mirror_trade(
+        state,
+        symbol,
+        pos,
+        exit_prem=float(exit_px),
+        exec_reason=exit_reason or "EXIT",
+        index_price=index_price,
+        exit_signal=fast_signal,
+        exec_pnl=float(exec_pnl_scaled),
+        exit_time_iso=exit_time_iso,
+        trade_age_sec=trade_age_sec,
+    )
+    return True
 
 
 def process_tick(symbol: str, final_fast: Dict[str, Any], chain_snapshot: Any, state: Dict[str, Any]) -> None:
+    del chain_snapshot  # execution engine already used chain; mirror only reads state
+    sym = str(symbol or "").upper()
+    if sym not in _paper_symbols():
+        return
+    if not _use_execution_mirror():
+        return
+
     if not state.get(_BOOTSTRAP_KEY):
         bootstrap(state)
 
-    aggregate = final_fast.get("platform_aggregate") or {}
-    if not isinstance(aggregate, dict):
-        aggregate = {}
-    risk = final_fast.get("platform_risk") or {}
-    if not isinstance(risk, dict):
-        risk = {}
     pt = state.setdefault("paper_trades", _default_paper_state())
     pt.setdefault("active", {})
     pt.setdefault("stats", _default_paper_state()["stats"])
     st = pt["stats"]
     st.setdefault("system_health", _system_health(st))
 
-    sym = str(symbol or "").upper()
+    ex = _execution_bucket(state).get(sym) or {}
+    efs = _final_bucket(state).get(sym)
+    index_price = float((final_fast or {}).get("price") or 0.0)
+    fast_signal = str((final_fast or {}).get("signal") or "NO_TRADE").upper()
+
     active = pt["active"].get(sym)
 
-    closed = False
-    if active:
-        closed = _update_active_position(state, sym, active, chain_snapshot, final_fast, aggregate)
+    if active and active.get("mirror_execution"):
+        if str(ex.get("status") or "").upper() == "OPEN":
+            _sync_mirror_open(state, sym, active, ex)
+        else:
+            _try_close_mirror(state, sym, active, ex, efs if isinstance(efs, dict) else None, index_price, fast_signal)
+        st["system_health"] = _system_health(st)
+        return
 
-    if not closed and sym not in pt.get("active", {}):
-        _maybe_open(state, sym, final_fast, chain_snapshot, aggregate, risk)
+    # New mirror session: execution OPEN (CONFIRMED final signal is emitted same tick).
+    if str(ex.get("status") or "").upper() == "OPEN":
+        _open_mirror_from_execution(state, sym, ex, efs if isinstance(efs, dict) else None)
 
     st["system_health"] = _system_health(st)
