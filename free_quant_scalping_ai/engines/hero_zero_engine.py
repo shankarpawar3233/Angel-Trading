@@ -22,10 +22,47 @@ logger = get_logger(__name__)
 # SENSEX (BFO): Friday (4=Fri)
 _NIFTY_EXPIRY_WEEKDAY = 3
 _SENSEX_EXPIRY_WEEKDAY = 4
+_EXPIRY_CACHE: dict[tuple[str, str], bool] = {}
 
 
 def _truthy_env(key: str) -> bool:
     return (os.getenv(key) or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _expiry_in_master_today(symbol: str) -> bool:
+    """
+    Dynamic expiry-day check from instrument master (cached per symbol/date).
+    Helps when exchange schedules shift or special sessions move weekly expiry.
+    """
+    su = str(symbol or "").strip().upper()
+    today = datetime.now(_IST).date()
+    ck = (su, today.isoformat())
+    if ck in _EXPIRY_CACHE:
+        return _EXPIRY_CACHE[ck]
+    allowed_names = {"NIFTY": {"NIFTY"}, "SENSEX": {"SENSEX", "SENSEX50"}}.get(su, {su})
+    hit = False
+    try:
+        from data.angel_instruments import load_instruments
+
+        for inst in load_instruments():
+            if str(inst.get("instrumenttype") or "").upper() != "OPTIDX":
+                continue
+            if str(inst.get("name") or "").strip().upper() not in allowed_names:
+                continue
+            exp = str(inst.get("expiry") or "").strip().upper()
+            if not exp:
+                continue
+            try:
+                d = datetime.strptime(exp, "%d%b%Y").date()
+            except ValueError:
+                continue
+            if d == today:
+                hit = True
+                break
+    except Exception:
+        hit = False
+    _EXPIRY_CACHE[ck] = hit
+    return hit
 
 
 def hero_zero_gate(symbol: str) -> tuple[bool, str]:
@@ -58,6 +95,8 @@ def hero_zero_gate(symbol: str) -> tuple[bool, str]:
             )
         except ValueError:
             pass  # fall through
+    if _expiry_in_master_today(su):
+        return True, "expiry_day_master"
     if su == "NIFTY":
         if datetime.now(_IST).weekday() == _NIFTY_EXPIRY_WEEKDAY:
             return True, "expiry_day"

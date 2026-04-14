@@ -44,9 +44,9 @@ def discover_nifty_options(
         itype = str(inst.get("instrumenttype", "")).upper()
         if itype != "OPTIDX":
             continue
-        name = str(inst.get("name", "")).upper()
+        name = str(inst.get("name", "")).strip().upper()
         sym = str(inst.get("symbol", "")).upper()
-        if "NIFTY" not in name and "NIFTY" not in sym:
+        if name != "NIFTY":
             continue
 
         parsed = _parse_option_symbol(sym)

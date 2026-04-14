@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
+import os
 import sqlite3
 from contextlib import contextmanager
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable, Literal
 
@@ -291,6 +294,126 @@ def get_signal_history(
             payload = {}
         out.append({"ts": ts.isoformat() if hasattr(ts, "isoformat") else str(ts), **payload})
     return out
+
+
+def _ist_zone():
+    try:
+        from zoneinfo import ZoneInfo
+
+        return ZoneInfo("Asia/Kolkata")
+    except Exception:
+        return timezone(timedelta(hours=5, minutes=30))
+
+
+def _ts_to_ist_date(ts_val) -> date | None:
+    if ts_val is None:
+        return None
+    try:
+        t = pd.Timestamp(ts_val)
+        if t.tzinfo is None:
+            t = t.tz_localize("UTC")
+        else:
+            t = t.tz_convert("UTC")
+        return t.tz_convert(_ist_zone()).date()
+    except Exception:
+        try:
+            s = str(ts_val).replace("Z", "+00:00")
+            dt = datetime.fromisoformat(s)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(_ist_zone()).date()
+        except Exception:
+            return None
+
+
+def reset_final_fast_signal_history(
+    *,
+    scope: Literal["today_ist", "all"] = "today_ist",
+    jsonl_path: Path | None = None,
+) -> dict:
+    """
+    Remove persisted fast-signal history used by /signal-history and analysis JSONL.
+
+    - ``today_ist``: drop rows whose timestamp falls on the current calendar day in Asia/Kolkata.
+    - ``all``: remove every ``final_fast`` row and truncate the JSONL log.
+
+    Returns counts for logging/API responses.
+    """
+    ist = _ist_zone()
+    today_ist = datetime.now(ist).date()
+    path = jsonl_path or Path(os.getenv("SIGNAL_RECORD_FILE", "logs/signal_events.jsonl"))
+    sqlite_deleted = 0
+    jsonl_removed = 0
+    jsonl_kept = 0
+
+    with get_connection() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT id, ts FROM signals WHERE category = ?", ("final_fast",))
+        rows = cur.fetchall()
+        ids_del: list[int] = []
+        for rid, ts in rows:
+            if scope == "all":
+                ids_del.append(int(rid))
+                continue
+            d = _ts_to_ist_date(ts)
+            if d == today_ist:
+                ids_del.append(int(rid))
+        if ids_del:
+            chunk = 400
+            for i in range(0, len(ids_del), chunk):
+                part = ids_del[i : i + chunk]
+                q = "DELETE FROM signals WHERE id IN (%s)" % ",".join("?" * len(part))
+                cur.execute(q, part)
+            sqlite_deleted = len(ids_del)
+        conn.commit()
+
+    if path.is_file():
+        if scope == "all":
+            try:
+                with path.open("r", encoding="utf-8") as f:
+                    jsonl_removed = sum(1 for line in f if line.strip())
+                path.write_text("", encoding="utf-8")
+            except OSError as exc:
+                logger.warning("[signals] could not truncate %s: %s", path, exc)
+        else:
+            try:
+                kept: list[str] = []
+                with path.open("r", encoding="utf-8") as f:
+                    for line in f:
+                        raw = line.strip()
+                        if not raw:
+                            continue
+                        try:
+                            row = json.loads(raw)
+                            ts_field = row.get("ts")
+                            d = _ts_to_ist_date(ts_field)
+                            if d == today_ist:
+                                jsonl_removed += 1
+                                continue
+                        except json.JSONDecodeError:
+                            kept.append(line.rstrip("\n"))
+                            jsonl_kept += 1
+                            continue
+                        kept.append(line.rstrip("\n"))
+                        jsonl_kept += 1
+                path.write_text("\n".join(kept) + ("\n" if kept else ""), encoding="utf-8")
+            except OSError as exc:
+                logger.warning("[signals] could not rewrite %s: %s", path, exc)
+
+    logger.info(
+        "[signals] reset scope=%s sqlite_deleted=%s jsonl_removed=%s path=%s",
+        scope,
+        sqlite_deleted,
+        jsonl_removed,
+        path,
+    )
+    return {
+        "scope": scope,
+        "sqlite_deleted": sqlite_deleted,
+        "jsonl_removed_lines": jsonl_removed,
+        "jsonl_path": str(path),
+        "today_ist": str(today_ist),
+    }
 
 
 def insert_option_ticks(symbol: str, ticks: list) -> None:

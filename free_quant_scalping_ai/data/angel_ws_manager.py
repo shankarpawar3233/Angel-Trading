@@ -59,9 +59,11 @@ _heartbeat_thread: Optional[threading.Thread] = None
 
 _last_any_tick = 0.0
 _last_index_tick = 0.0
+_last_index_tick_by_symbol: Dict[str, float] = {}
 _last_index_log = 0.0
 _last_chain_log = 0.0
 _last_sensex_health_log = 0.0
+_last_gap_log_by_symbol: Dict[str, float] = {}
 _reconnect_interval = 3.0
 _stale_index_seconds = 45.0
 
@@ -90,18 +92,30 @@ def _option_strike_type(symbol: str) -> Optional[tuple]:
 
 
 def _extract_ltp(item: Dict[str, Any]) -> Optional[float]:
-    ltp = item.get("ltp") or item.get("lastPrice")
-    if ltp is None and "last_traded_price" in item:
+    """
+    Angel SmartAPI WebSocket v2 binary ticks expose ``last_traded_price`` in paise (÷100 for rupees).
+    Prefer that field when present so index and NFO premiums are not stored 100× too large.
+    REST/JSON fallbacks may use ``ltp`` / ``lastPrice`` already in rupees.
+    """
+    ltp_raw = item.get("last_traded_price")
+    if ltp_raw is not None:
         try:
-            ltp = float(item["last_traded_price"]) / 100.0
+            v = float(ltp_raw)
+            if v > 0:
+                return v / 100.0
         except (TypeError, ValueError):
             pass
-    if ltp is None:
-        return None
-    try:
-        return float(ltp)
-    except (TypeError, ValueError):
-        return None
+    for key in ("ltp", "lastPrice", "close"):
+        raw = item.get(key)
+        if raw is None:
+            continue
+        try:
+            v = float(raw)
+            if v > 0:
+                return v
+        except (TypeError, ValueError):
+            continue
+    return None
 
 
 def _log_subscription_snapshot() -> None:
@@ -173,8 +187,18 @@ def _on_data(_wsapp: Any, message: Any) -> None:
 
                 sym = token_to_symbol.get(token)
                 if sym and ltp is not None:
-                    ws_price_cache[sym.upper()] = ltp
+                    su = sym.upper()
+                    prev_sym_tick = float(_last_index_tick_by_symbol.get(su) or 0.0)
+                    ws_price_cache[su] = ltp
+                    _last_index_tick_by_symbol[su] = now
                     _last_index_tick = now
+                    if prev_sym_tick > 0:
+                        gap = now - prev_sym_tick
+                        last_gap_log = float(_last_gap_log_by_symbol.get(su) or 0.0)
+                        if gap >= 1.5 and (now - last_gap_log) >= 2.0:
+                            _last_gap_log_by_symbol[su] = now
+                            logger.warning("[WS GAP] %s gap=%.2fs last_tick=%s", su, gap, int(prev_sym_tick))
+                            _append_ws_health_line(f"GAP symbol={su} gap_sec={gap:.2f} last_tick_epoch={int(prev_sym_tick)}")
                     if now - _last_index_log >= 2.0:
                         _last_index_log = now
                         try:
@@ -205,6 +229,7 @@ def _on_data(_wsapp: Any, message: Any) -> None:
                     option_chain_cache.setdefault(under, {})
                     option_chain_cache[under].setdefault(sk, {})
                     coi = oi_change if oi_change is not None else option_chain_cache.get(under, {}).get(sk, {}).get(opt_type, {}).get("change_oi")
+                    meta = (_option_token_map.get(_norm_token(token)) if _option_token_map else None) or {}
                     leg = {
                         "ltp": ltp,
                         "oi": float(oi) if oi is not None else option_chain_cache.get(under, {}).get(sk, {}).get(opt_type, {}).get("oi"),
@@ -213,6 +238,7 @@ def _on_data(_wsapp: Any, message: Any) -> None:
                         "oi_change": coi,
                         "token": token,
                         "ts": now,
+                        "expiry": str(meta.get("expiry") or ""),
                     }
                     option_chain_cache[under][sk][opt_type] = leg
                     _chain_update_prints += 1
@@ -599,10 +625,20 @@ def get_feed_health() -> Dict[str, Any]:
     with _lock:
         idx_age = (now - _last_index_tick) if _last_index_tick else None
         any_age = (now - _last_any_tick) if _last_any_tick else None
+        sym_last = {
+            str(sym): int(ts) if ts else None
+            for sym, ts in _last_index_tick_by_symbol.items()
+        }
+        sym_gap = {
+            str(sym): round(now - ts, 3) if ts else None
+            for sym, ts in _last_index_tick_by_symbol.items()
+        }
         return {
             "last_index_tick_age_sec": round(idx_age, 2) if idx_age is not None else None,
             "last_any_tick_age_sec": round(any_age, 2) if any_age is not None else None,
             "index_stale": bool(idx_age is not None and idx_age > _stale_index_seconds),
+            "last_tick_epoch_by_symbol": sym_last,
+            "tick_gap_sec_by_symbol": sym_gap,
         }
 
 

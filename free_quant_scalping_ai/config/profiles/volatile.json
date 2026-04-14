@@ -1,0 +1,7 @@
+{
+  "mode": "VOLATILE",
+  "target_multiplier": 0.9,
+  "stop_multiplier": 0.85,
+  "confidence_multiplier": 1.1,
+  "aggregate_confidence_multiplier": 1.08
+}

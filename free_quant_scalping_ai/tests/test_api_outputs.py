@@ -78,6 +78,7 @@ def main():
     results.append(test_endpoint("gamma-exposure", "/gamma-exposure"))
     results.append(test_endpoint("max-pain", "/max-pain"))
     results.append(test_endpoint("hero-zero", "/hero-zero"))
+    results.append(test_endpoint("hero-zero-expiry", "/hero-zero-expiry", ["hero_zero_expiry"]))
     results.append(test_endpoint("oi", "/oi"))
     results.append(test_endpoint("expiry-bias", "/expiry-bias"))
 

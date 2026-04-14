@@ -176,7 +176,8 @@ def apply_hysteresis(
 
 def stabilizer_params(su: str, symbol: str) -> Tuple[int, int, float]:
     min_conf = _env_int("MIN_CONF_SENSEX", 58) if su == "SENSEX" else _env_int("MIN_CONF_NIFTY", 62)
-    stable_cycles = _env_int("STABLE_CYCLES_SENSEX", 2) if su == "SENSEX" else _env_int("STABLE_CYCLES_NIFTY", 3)
+    # NIFTY default 2 (temporary test: was 3) — override with STABLE_CYCLES_NIFTY
+    stable_cycles = _env_int("STABLE_CYCLES_SENSEX", 2) if su == "SENSEX" else _env_int("STABLE_CYCLES_NIFTY", 2)
     default_lock = "3.0" if symbol.upper() == "NIFTY" else "5.0"
     try:
         entry_lock = float(os.getenv(f"ENTRY_LOCK_SEC_{su}", default_lock))

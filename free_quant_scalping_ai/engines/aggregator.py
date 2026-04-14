@@ -4,11 +4,12 @@ from typing import Any, Dict, List, Tuple
 
 from engines.config import env_float
 
-PRIORITY: List[str] = ["hero_zero", "scalping", "hold", "call_side", "put_side", "support_resistance"]
+PRIORITY: List[str] = ["hero_zero", "scalping", "smc", "hold", "call_side", "put_side", "support_resistance"]
 
 DEFAULT_WEIGHTS = {
     "hero_zero": 3.0,
     "scalping": 2.0,
+    "smc": 0.75,
     "hold": 1.0,
     "call_side": 1.5,
     "put_side": 1.5,
@@ -47,6 +48,8 @@ def normalize_confidence(engine: str, raw_confidence: float, regime: str) -> flo
         return min(100.0, c * (1.18 if r == "EXPIRY_HIGH_GAMMA" else 0.85))
     if engine == "scalping":
         return c
+    if engine == "smc":
+        return min(100.0, c * (1.02 if r in ("TRENDING", "VOLATILE") else 0.98))
     if engine in ("call_side", "put_side"):
         return min(100.0, c * (1.04 if r == "TRENDING" else 1.0))
     return c

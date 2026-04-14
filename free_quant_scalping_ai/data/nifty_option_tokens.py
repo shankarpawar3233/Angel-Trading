@@ -8,10 +8,17 @@ Supports:
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from data.angel_instruments import load_instruments
+try:
+    from zoneinfo import ZoneInfo
+
+    _IST = ZoneInfo("Asia/Kolkata")
+except Exception:  # pragma: no cover
+    _IST = timezone(timedelta(hours=5, minutes=30))
+
+from data.angel_instruments import INSTRUMENTS_PATH, load_instruments
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -45,10 +52,16 @@ def _get_index_option_tokens(
     spot_price: float,
     atm_range: float,
     max_tokens: int,
-    expiry_count: int = 2,
+    expiry_count: int = 1,
 ) -> Tuple[List[str], Dict[str, Dict[str, Any]]]:
     spot = float(spot_price)
     name_u = index_name.upper()
+    # Master row ``name`` must match the index exactly. Substring checks like "NIFTY" in "FINNIFTY"
+    # pulled the wrong product: same strike (e.g. 23550 CE) but totally different premiums.
+    allowed_inst_names = {
+        "NIFTY": {"NIFTY"},
+        "SENSEX": {"SENSEX", "SENSEX50"},
+    }.get(name_u, {name_u})
     token_map: Dict[str, Dict[str, Any]] = {}
 
     filtered: List[Dict[str, Any]] = []
@@ -59,24 +72,38 @@ def _get_index_option_tokens(
         if str(inst.get("instrumenttype") or "").upper() != "OPTIDX":
             continue
         sym = str(inst.get("symbol") or "").upper()
-        nm = str(inst.get("name") or "").upper()
+        nm = str(inst.get("name") or "").strip().upper()
         if not sym.endswith(("CE", "PE")):
             continue
-        if name_u not in nm and not sym.startswith(name_u):
+        if nm not in allowed_inst_names:
             continue
         filtered.append(inst)
 
-    # Prefer nearest expiries to keep subscriptions liquid and moving.
+    # Prefer nearest calendar expiries. expiry_count=1 → front month/week only (matches typical “current week” NIFTY screen).
+    # Drop expired series (IST calendar date). A stale master that still lists e.g. 17MAR2026 in April would otherwise
+    # become the “front” expiry and chain LTPs won’t match the broker’s live weekly.
     expiries_raw = [str(x.get("expiry") or "").strip().upper() for x in filtered if str(x.get("expiry") or "").strip()]
+    today_ist = datetime.now(_IST).date()
     expiry_dates: List[Tuple[datetime, str]] = []
     for e in set(expiries_raw):
         try:
-            expiry_dates.append((datetime.strptime(e, "%d%b%Y"), e))
+            dt = datetime.strptime(e, "%d%b%Y")
         except ValueError:
             continue
+        if dt.date() < today_ist:
+            continue
+        expiry_dates.append((dt, e))
     expiry_dates.sort(key=lambda x: x[0])
     exp_n = max(1, int(expiry_count))
-    selected_expiries = {x[1] for x in expiry_dates[:exp_n]} if expiry_dates else set()
+    if not expiry_dates:
+        logger.error(
+            "[%s TOKENS] No option expiries on or after today (IST %s) in instrument master — refresh or delete %s",
+            name_u,
+            today_ist.isoformat(),
+            INSTRUMENTS_PATH,
+        )
+        return [], {}
+    selected_expiries = {x[1] for x in expiry_dates[:exp_n]}
 
     for inst in filtered:
         exp = str(inst.get("expiry") or "").strip().upper()
@@ -94,7 +121,15 @@ def _get_index_option_tokens(
             "strike": strike,
             "type": "CE" if sym.endswith("CE") else "PE",
             "exchangeType": int(exchange_type),
+            "expiry": exp or "",
         }
+
+    def _expiry_sort_key(meta: Dict[str, Any]) -> tuple:
+        es = str(meta.get("expiry") or "").strip().upper()
+        try:
+            return (datetime.strptime(es, "%d%b%Y"), str(meta.get("_tok", "")))
+        except ValueError:
+            return (datetime.max, str(meta.get("_tok", "")))
 
     # Balanced selection: prefer nearest strikes with both CE/PE coverage.
     strike_groups: Dict[float, Dict[str, List[Tuple[str, Dict[str, Any]]]]] = {}
@@ -103,26 +138,37 @@ def _get_index_option_tokens(
         t = str(meta.get("type") or "")
         strike_groups.setdefault(s, {"CE": [], "PE": []})
         if t in ("CE", "PE"):
-            strike_groups[s][t].append((tok, meta))
+            m = dict(meta)
+            m["_tok"] = tok
+            strike_groups[s][t].append((tok, m))
     ordered_strikes = sorted(strike_groups.keys(), key=lambda s: abs(s - spot))
     balanced_items: List[Tuple[str, Dict[str, Any]]] = []
     for s in ordered_strikes:
-        ce_list = sorted(strike_groups[s]["CE"], key=lambda x: x[0])
-        pe_list = sorted(strike_groups[s]["PE"], key=lambda x: x[0])
+        # Nearest expiry first so CE/PE LTP matches the weekly screen most traders watch.
+        ce_list = sorted(strike_groups[s]["CE"], key=lambda x: _expiry_sort_key(x[1]))
+        pe_list = sorted(strike_groups[s]["PE"], key=lambda x: _expiry_sort_key(x[1]))
         if ce_list:
-            balanced_items.append(ce_list[0])
+            balanced_items.append((ce_list[0][0], {k: v for k, v in ce_list[0][1].items() if k != "_tok"}))
         if pe_list:
-            balanced_items.append(pe_list[0])
+            balanced_items.append((pe_list[0][0], {k: v for k, v in pe_list[0][1].items() if k != "_tok"}))
         if len(balanced_items) >= int(max_tokens):
             break
+    covered_strike_type = {(float(m["strike"]), str(m.get("type") or "")) for _t, m in balanced_items}
     if len(balanced_items) < int(max_tokens):
-        used = {t for t, _ in balanced_items}
+        used_tokens = {t for t, _ in balanced_items}
         extras = sorted(
-            [(t, m) for t, m in token_map.items() if t not in used],
+            [
+                (t, m)
+                for t, m in token_map.items()
+                if t not in used_tokens
+                and (float(m["strike"]), str(m.get("type") or "")) not in covered_strike_type
+            ],
             key=lambda kv: (abs(float(kv[1]["strike"]) - spot), kv[0]),
         )
         need = int(max_tokens) - len(balanced_items)
-        balanced_items.extend(extras[:need])
+        for t, m in extras[:need]:
+            balanced_items.append((t, m))
+            covered_strike_type.add((float(m["strike"]), str(m.get("type") or "")))
     token_map = dict(balanced_items[: int(max_tokens)])
     tokens = list(token_map.keys())
     ce_count = sum(1 for _t, m in token_map.items() if str(m.get("type") or "") == "CE")
@@ -145,7 +191,7 @@ def get_nifty_option_tokens(
     spot_price: float,
     atm_range: float = 600.0,
     max_tokens: int = 240,
-    expiry_count: int = 2,
+    expiry_count: int = 1,
 ) -> Tuple[List[str], Dict[str, Dict[str, Any]]]:
     out = _get_index_option_tokens(
         instruments,

@@ -7,21 +7,29 @@ Consumes the lightweight features from fast_features.compute_fast_features and
 returns an immediate trade suggestion.
 """
 
-from typing import Dict, Any
+from typing import Any, Dict, Tuple
 
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+# Relaxed vs legacy (reduce NO_TRADE at rule layer): OI/vol/mom gates
+CALL_THRESH = 0.32
+PUT_THRESH = 0.32
+VOL_THRESH = 0.35
+MOM_UP = 0.00005
+MOM_DOWN = -0.00005
+# SENSEX no-volume: OI change / spread substitutes (aligned with WS gaps on BFO).
+CHG_THRESH = 0.30
+SPREAD_CE = 0.025
+SPREAD_PE = -0.025
+OI_RELAX = 0.30
 
-def generate_fast_scalping_signal(features: Dict[str, Any], symbol: str = "NIFTY") -> str:
+
+def generate_fast_scalping_signal_detail(features: Dict[str, Any], symbol: str = "NIFTY") -> Tuple[str, str]:
     """
-    Simple deterministic rules:
-      - BUY_CE: strong call OI + volume + positive momentum
-      - BUY_PE: strong put OI + volume + negative momentum
-      - SENSEX: when chain volume is missing/zero, do not block — use OI strength,
-        OI-change concentration, momentum, and ATM spread skew instead of volume gates.
-      - otherwise: NO_TRADE
+    Returns (signal, rule_diagnostic).
+    rule_diagnostic is empty when directional; otherwise a short reason for NO_TRADE at rule layer.
     """
     su = str(symbol or "NIFTY").upper()
     call_oi = float(features.get("call_oi_strength") or 0.0)
@@ -30,19 +38,9 @@ def generate_fast_scalping_signal(features: Dict[str, Any], symbol: str = "NIFTY
     put_vol = float(features.get("put_volume_strength") or 0.0)
     mom = float(features.get("price_momentum") or 0.0)
 
-    # Tuned for live WS: OI updates can lag; allow softer OI/vol gates with clearer mom.
-    CALL_THRESH = 0.38
-    PUT_THRESH = 0.38
-    VOL_THRESH = 0.42
-    MOM_UP = 0.00008
-    MOM_DOWN = -0.00008
-    # SENSEX no-volume: OI change / spread substitutes (aligned with WS gaps on BFO).
-    CHG_THRESH = 0.30
-    SPREAD_CE = 0.025
-    SPREAD_PE = -0.025
-    OI_RELAX = 0.30
-
     vol_available = bool(features.get("volume_available", True))
+    buy_ce = False
+    buy_pe = False
 
     if su == "SENSEX" and not vol_available:
         oi_chg_ce = float(features.get("call_oi_change_strength") or 0.0)
@@ -87,16 +85,37 @@ def generate_fast_scalping_signal(features: Dict[str, Any], symbol: str = "NIFTY
             buy_ce = call_vol >= 0.52 and call_vol > put_vol and mom >= MOM_UP
             buy_pe = put_vol >= 0.52 and put_vol > call_vol and mom <= MOM_DOWN
 
-    # Avoid conflicting signals (both sides active)
     if buy_ce and buy_pe:
-        return "NO_TRADE"
+        return "NO_TRADE", "rule_conflict_both_ce_pe"
+
     if buy_ce:
         logger.debug("[FAST SIGNAL] BUY_CE (call_oi=%.2f call_vol=%.2f mom=%.5f)", call_oi, call_vol, mom)
-        return "BUY_CE"
+        return "BUY_CE", ""
+
     if buy_pe:
         logger.debug("[FAST SIGNAL] BUY_PE (put_oi=%.2f put_vol=%.2f mom=%.5f)", put_oi, put_vol, mom)
-        return "BUY_PE"
-    return "NO_TRADE"
+        return "BUY_PE", ""
+
+    # Rule layer: nothing passed — compact diagnostic (no execution impact)
+    if su == "SENSEX" and not vol_available:
+        return "NO_TRADE", (
+            f"rule_no_match_sensex_vol_fallback|coi={call_oi:.3f}|poi={put_oi:.3f}|mom={mom:.6f}"
+        )
+    oi_available = (call_oi > 0.0) or (put_oi > 0.0)
+    if oi_available:
+        return "NO_TRADE", (
+            f"rule_no_match|coi={call_oi:.3f}|cov={call_vol:.3f}|poi={put_oi:.3f}|pov={put_vol:.3f}|mom={mom:.6f}"
+            f"|need_co>={CALL_THRESH}|cov>={VOL_THRESH}|mom_up>={MOM_UP}|mom_dn<={MOM_DOWN}"
+        )
+    return "NO_TRADE", (
+        f"rule_no_match_no_oi|cov={call_vol:.3f}|pov={put_vol:.3f}|mom={mom:.6f}"
+    )
+
+
+def generate_fast_scalping_signal(features: Dict[str, Any], symbol: str = "NIFTY") -> str:
+    """Backward-compatible: signal only."""
+    sig, _ = generate_fast_scalping_signal_detail(features, symbol)
+    return sig
 
 
 def generate_ml_signal(features: Dict[str, Any], symbol: str = "NIFTY") -> Dict[str, Any]:
@@ -173,4 +192,3 @@ def compute_fast_confidence(features: Dict[str, Any]) -> int:
     conf = int(round(50.0 + score * 45.0))
     conf = max(50, min(95, conf))
     return conf
-

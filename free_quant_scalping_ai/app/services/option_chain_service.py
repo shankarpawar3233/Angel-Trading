@@ -222,8 +222,11 @@ def select_strike_atm_window(
     hi = min(len(strikes), atm_idx + int(atm_steps_fwd) + 1)
     candidates = strikes[lo:hi]
 
+    # Prefer strikes closest to spot first (same idea as select_strike_for_scalp). A pure
+    # liquidity+move score can pick a strike 100+ points away on expiry when OI piles on
+    # a stale strike — then LTP/entry no longer match the broker's ATM.
     best: Optional[Dict[str, Any]] = None
-    best_score: Optional[float] = None
+    best_rank: Optional[tuple[float, float]] = None
     prev = ltp_prev_map or {}
 
     for s_val in candidates:
@@ -246,10 +249,19 @@ def select_strike_atm_window(
                 move = abs(float(premium) - float(prev_ltp))
             except (TypeError, ValueError):
                 move = 0.0
+        dist_steps = abs(s_val - ref_price) / strike_step
+        side_penalty = 0.0
+        if side == "CE" and s_val < ref_price:
+            side_penalty = 0.35
+        elif side == "PE" and s_val > ref_price:
+            side_penalty = 0.35
+        distance_rank = dist_steps + side_penalty
         liquidity = vol * 0.001 + oi * 1e-6
-        score = liquidity + move * 2.0
-        if best_score is None or score > best_score:
-            best_score = score
+        activity = liquidity + move * 2.0
+        # Lexicographic: nearer to ref wins; tie-break higher activity (liquidity + move).
+        rank = (distance_rank, -activity)
+        if best_rank is None or rank < best_rank:
+            best_rank = rank
             best = {"strike": s_val, "type": side, "premium": premium}
 
     if best is not None:

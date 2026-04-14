@@ -10,16 +10,112 @@ import {
   Legend,
 } from 'chart.js'
 import { Bar } from 'react-chartjs-2'
-import { fetchMarket, fetchSignals, fetchOi, fetchMarketRegime, fetchLiquidityMap, fetchStopHunts, fetchFinalSignal, fetchWsHealth, fetchPaperTrades, resetPaperTrades, fetchSignalHistory, fetchEngines } from './api'
+import {
+  fetchMarket,
+  fetchSignals,
+  fetchOi,
+  fetchMarketRegime,
+  fetchLiquidityMap,
+  fetchStopHunts,
+  fetchFinalSignal,
+  fetchWsHealth,
+  fetchPaperTrades,
+  resetPaperTrades,
+  fetchSignalHistory,
+  fetchEngines,
+  fetchLatency,
+  fetchEngineSignals,
+  fetchStrategySignals,
+  fetchHeroZeroExpiry,
+  fetchSystemMode,
+  setSensexSessionEnabled,
+} from './api'
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, PointElement, Title, Tooltip, Legend)
 
-function LiveBadge() {
+function MarketStatusBadge({ marketOpen }) {
+  const isOpen = Boolean(marketOpen)
   return (
-    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-500/20 text-emerald-400 border border-emerald-500/40">
-      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-      LIVE
+    <span
+      className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium border ${
+        isOpen ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40' : 'bg-red-500/20 text-red-300 border-red-500/40'
+      }`}
+    >
+      <span className={`w-1.5 h-1.5 rounded-full ${isOpen ? 'bg-emerald-400 animate-pulse' : 'bg-red-300'}`} />
+      {isOpen ? 'LIVE' : 'CLOSED'}
     </span>
+  )
+}
+
+function ageColorClassSec(sec) {
+  const v = Number(sec || 0)
+  if (v < 1) return 'text-emerald-400'
+  if (v <= 3) return 'text-amber-400'
+  return 'text-red-400'
+}
+
+function LatencyHeaderBadge({ latency, symbols, marketOpen, lastIndexTickAgeSec }) {
+  if (!marketOpen) {
+    const age = Number(lastIndexTickAgeSec || 0)
+    return (
+      <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium border bg-slate-700/50 text-slate-300 border-slate-600/60">
+        MARKET CLOSED | Last tick: {Number.isFinite(age) && age > 0 ? `${age.toFixed(1)}s` : '--'}
+      </span>
+    )
+  }
+  const list = Array.isArray(symbols) ? symbols : []
+  const rows = list
+    .map((s) => ({ sym: s, wsMs: Number(latency?.[s]?.ws_latency_ms || 0), cpuMs: Number(latency?.[s]?.compute_ms || 0) }))
+    .filter((r) => Number.isFinite(r.wsMs) && r.wsMs > 0)
+  if (rows.length === 0) {
+    return (
+      <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-slate-700/50 text-slate-400 border border-slate-600/60">
+        LAT --
+      </span>
+    )
+  }
+  const worst = rows.reduce((a, b) => (b.wsMs > a.wsMs ? b : a), rows[0])
+  const wsSec = worst.wsMs / 1000.0
+  const cls =
+    wsSec > 3
+      ? 'bg-red-500/20 text-red-300 border-red-500/50'
+      : wsSec >= 1
+        ? 'bg-amber-500/20 text-amber-300 border-amber-500/50'
+        : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50'
+  return (
+    <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium border ${cls}`}>
+      LAT {wsSec.toFixed(1)}s (CPU {worst.cpuMs.toFixed(1)}ms)
+    </span>
+  )
+}
+
+function SensexSessionToggle({ enabled, busy, onToggle, restartHint }) {
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <label className="flex items-center gap-2 cursor-pointer select-none text-xs text-slate-400">
+        <span className="font-mono text-slate-500">SENSEX</span>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={enabled}
+          disabled={busy}
+          onClick={() => onToggle(!enabled)}
+          className={`relative w-9 h-5 rounded-full transition-colors ${
+            enabled ? 'bg-violet-600' : 'bg-slate-700'
+          } ${busy ? 'opacity-50' : ''}`}
+        >
+          <span
+            className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${
+              enabled ? 'translate-x-4' : ''
+            }`}
+          />
+        </button>
+        <span className="text-slate-500 w-14">{enabled ? 'On' : 'Off'}</span>
+      </label>
+      {restartHint ? (
+        <span className="text-[10px] text-amber-500/90 max-w-[200px] text-right leading-tight">{restartHint}</span>
+      ) : null}
+    </div>
   )
 }
 
@@ -90,6 +186,8 @@ function resolveScalpingPayload(s) {
       aggregate_leg_entry: s.aggregate_leg_entry,
       aggregate_leg_target: s.aggregate_leg_target,
       aggregate_leg_stoploss: s.aggregate_leg_stoploss,
+      option_expiry: s.option_expiry,
+      aggregate_leg_expiry: s.aggregate_leg_expiry,
     }
   }
   return {
@@ -198,13 +296,14 @@ function decisionRowClass(decisionLabel) {
   return 'text-slate-200'
 }
 
-const ENGINE_DISPLAY_ORDER = ['scalping', 'hold', 'call_side', 'put_side', 'hero_zero']
+const ENGINE_DISPLAY_ORDER = ['scalping', 'smc', 'hold', 'call_side', 'put_side', 'hero_zero']
 
 const ENGINE_LABELS = {
   scalping: 'Scalping Engine',
   hold: 'Hold Engine',
   call_side: 'Call Side Engine',
   put_side: 'Put Side Engine',
+  smc: 'SMC Engine',
   hero_zero: 'Hero Zero Engine',
   support_resistance: 'Support / Resistance Engine',
 }
@@ -225,7 +324,7 @@ function engineSignalClass(signal) {
   return 'text-slate-400'
 }
 
-function EngineSignalsSection({ enginePlatform, symbols }) {
+function PlatformEngineSignalsSection({ enginePlatform, symbols }) {
   return (
     <section className="mb-8">
       <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Engine signals</h2>
@@ -343,8 +442,8 @@ function ScalpingCard({ symbol, scalping, heroZero, onPlaceOrder, aggregateSigna
       <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm font-mono">
         <span className="text-slate-500">Strike</span>
         <span className="text-slate-200">{scalping.strike || '–'}</span>
-        <span className="text-slate-500">Option LTP</span>
-        <span className="text-slate-200">
+        <span className="text-slate-500">Live option LTP</span>
+        <span className="text-cyan-300">
           {scalping.chain_ltp != null && scalping.chain_ltp !== ''
             ? Number(scalping.chain_ltp).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
             : '–'}
@@ -359,6 +458,12 @@ function ScalpingCard({ symbol, scalping, heroZero, onPlaceOrder, aggregateSigna
         <span className="text-emerald-400">{scalping.target != null ? scalping.target : '–'}</span>
         <span className="text-slate-500">SL</span>
         <span className="text-red-400">{scalping.stoploss != null ? scalping.stoploss : '–'}</span>
+        {scalping.option_expiry != null && String(scalping.option_expiry).trim() !== '' && (
+          <>
+            <span className="text-slate-500">Expiry</span>
+            <span className="text-slate-400 text-xs">{String(scalping.option_expiry)}</span>
+          </>
+        )}
       </div>
       {aggLeg && (
         <div className="mt-2 pt-2 border-t border-slate-700/70">
@@ -371,8 +476,8 @@ function ScalpingCard({ symbol, scalping, heroZero, onPlaceOrder, aggregateSigna
           <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm font-mono">
             <span className="text-slate-500">Strike</span>
             <span className="text-slate-200">{aggLeg.strike || '–'}</span>
-            <span className="text-slate-500">Option LTP</span>
-            <span className="text-slate-200">
+            <span className="text-slate-500">Live option LTP</span>
+            <span className="text-cyan-300">
               {aggLeg.ltp != null && aggLeg.ltp !== ''
                 ? Number(aggLeg.ltp).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
                 : '–'}
@@ -387,6 +492,12 @@ function ScalpingCard({ symbol, scalping, heroZero, onPlaceOrder, aggregateSigna
             <span className="text-emerald-400">{aggLeg.target != null ? aggLeg.target : '–'}</span>
             <span className="text-slate-500">SL</span>
             <span className="text-red-400">{aggLeg.sl != null ? aggLeg.sl : '–'}</span>
+            {scalping.aggregate_leg_expiry != null && String(scalping.aggregate_leg_expiry).trim() !== '' && (
+              <>
+                <span className="text-slate-500">Expiry</span>
+                <span className="text-slate-400 text-xs">{String(scalping.aggregate_leg_expiry)}</span>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -663,6 +774,41 @@ function StopHuntPanel({ stopHunt }) {
   )
 }
 
+function HeroZeroExpiryCard({ payload }) {
+  const n = payload?.NIFTY || payload?.nifty
+  if (!n || typeof n !== 'object') {
+    return <div className="text-slate-500 text-sm font-mono">No Hero Zero Expiry payload yet (NIFTY tick required).</div>
+  }
+  const sig = String(n.signal || 'NO_TRADE').toUpperCase()
+  const sigClass =
+    sig === 'BUY_CE' ? 'text-emerald-400' : sig === 'BUY_PE' ? 'text-rose-400' : 'text-slate-400'
+  return (
+    <div className="rounded-lg border border-violet-700/50 bg-violet-950/20 p-3 font-mono text-sm">
+      <div className="text-[10px] uppercase tracking-wide text-violet-400/90 mb-2">
+        Hero Zero Expiry <span className="text-slate-500 font-normal normal-case">(isolated experiment · not execution)</span>
+      </div>
+      <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+        <span className="text-slate-500">Signal</span>
+        <span className={`font-semibold ${sigClass}`}>{sig}</span>
+        <span className="text-slate-500">Strike</span>
+        <span className="text-slate-200">{n.strike != null ? n.strike : '–'}</span>
+        <span className="text-slate-500">Entry</span>
+        <span className="text-slate-200">{n.entry != null ? Number(n.entry).toFixed(2) : '–'}</span>
+        <span className="text-slate-500">Target</span>
+        <span className="text-emerald-400">{n.target != null ? Number(n.target).toFixed(2) : '–'}</span>
+        <span className="text-slate-500">SL</span>
+        <span className="text-red-400">{n.sl != null ? Number(n.sl).toFixed(2) : '–'}</span>
+        <span className="text-slate-500">Strength</span>
+        <span className="text-slate-200">{n.strength != null ? Number(n.strength).toFixed(3) : '–'}</span>
+        <span className="text-slate-500">Confidence</span>
+        <span className="text-slate-200">{n.confidence != null ? String(n.confidence) : '–'}</span>
+      </div>
+      <div className="mt-2 text-[11px] text-slate-500 break-words">{n.reason ?? '–'}</div>
+      <div className="mt-1 text-[10px] text-slate-600">{n.time ?? ''}</div>
+    </div>
+  )
+}
+
 function FinalSignalCard({ finalSignal }) {
   if (!finalSignal || !Object.keys(finalSignal).length) return <div className="text-slate-500 text-sm">No final signal</div>
   const entries = Object.entries(finalSignal)
@@ -689,6 +835,22 @@ function FinalSignalCard({ finalSignal }) {
             <span className="text-slate-500">Reason</span><span className="text-slate-200" title={s?.decision_reason}>{s?.decision_reason ?? '–'}</span>
             <span className="text-slate-500">Stable</span><span className="text-slate-200">{s?.stable_count ?? '–'}</span>
             <span className="text-slate-500">Strike</span><span className="text-slate-200">{s?.strike ?? '–'}</span>
+            <span className="text-slate-500">Live option LTP</span>
+            <span className="text-cyan-300">
+              {s?.chain_ltp != null && s?.chain_ltp !== ''
+                ? Number(s.chain_ltp).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                : '–'}
+            </span>
+            <span className="text-slate-500">LTP age</span>
+            <span className={(s?.chain_ltp_age_sec != null && Number(s.chain_ltp_age_sec) > 2.0) ? 'text-amber-400' : 'text-slate-200'}>
+              {s?.chain_ltp_age_sec != null ? `${Number(s.chain_ltp_age_sec).toFixed(1)}s` : '–'}
+            </span>
+            {s?.option_expiry != null && String(s.option_expiry).trim() !== '' && (
+              <>
+                <span className="text-slate-500">Option expiry</span>
+                <span className="text-slate-300">{String(s.option_expiry)}</span>
+              </>
+            )}
             <span className="text-slate-500">Buy / Entry</span><span className="text-white font-medium">{s?.entry != null ? Number(s.entry).toFixed(2) : '–'}</span>
             <span className="text-slate-500">Target</span><span className="text-emerald-400">{s?.target != null ? Number(s.target).toFixed(2) : '–'}</span>
             <span className="text-slate-500">Stoploss</span><span className="text-red-400">{s?.stoploss != null ? Number(s.stoploss).toFixed(2) : '–'}</span>
@@ -769,8 +931,11 @@ function PaperTradesPanel({ paperTrades, onResetPaper }) {
   const lastTrade = pt.last_trade
   const lastClosedSide = lastTrade ? inferLastTradeSide(lastTrade) : null
   const guide = pt.guide || {}
+  const historyRows = Array.isArray(pt.history) ? pt.history : []
   const activeEntries = Object.entries(active)
-  const totalPnl = stats.total_pnl != null ? Number(stats.total_pnl) : 0
+  const realizedPnl = stats.total_pnl != null ? Number(stats.total_pnl) : 0
+  const unrealizedPnl = activeEntries.reduce((acc, [, a]) => acc + Number(a?.pnl_live ?? 0), 0)
+  const netPnl = realizedPnl + unrealizedPnl
   const closedCount = stats.total_trades ?? 0
   return (
     <div className="space-y-3">
@@ -791,9 +956,21 @@ function PaperTradesPanel({ paperTrades, onResetPaper }) {
         <div className="rounded border border-slate-700 p-2"><div className="text-slate-500">Wins</div><div className="text-emerald-400">{stats.wins ?? 0}</div></div>
         <div className="rounded border border-slate-700 p-2"><div className="text-slate-500">Losses</div><div className="text-red-400">{stats.losses ?? 0}</div></div>
         <div className="rounded border border-slate-700 p-2 lg:col-span-1">
-          <div className="text-slate-500">Total PnL (× lots)</div>
-          <div className={totalPnl >= 0 ? 'text-emerald-400 font-semibold' : 'text-red-400 font-semibold'}>
-            {stats.total_pnl != null ? Number(stats.total_pnl).toFixed(2) : '0.00'}
+          <div className="text-slate-500">Realized PnL (× lots)</div>
+          <div className={realizedPnl >= 0 ? 'text-emerald-400 font-semibold' : 'text-red-400 font-semibold'}>
+            {realizedPnl.toFixed(2)}
+          </div>
+        </div>
+        <div className="rounded border border-slate-700 p-2 lg:col-span-1">
+          <div className="text-slate-500">Unrealized PnL</div>
+          <div className={unrealizedPnl >= 0 ? 'text-emerald-400 font-semibold' : 'text-red-400 font-semibold'}>
+            {unrealizedPnl.toFixed(2)}
+          </div>
+        </div>
+        <div className="rounded border border-slate-700 p-2 lg:col-span-1">
+          <div className="text-slate-500">Net PnL</div>
+          <div className={netPnl >= 0 ? 'text-emerald-400 font-semibold' : 'text-red-400 font-semibold'}>
+            {netPnl.toFixed(2)}
           </div>
         </div>
         <div className="rounded border border-slate-700 p-2"><div className="text-slate-500">Win rate</div><div className="text-cyan-300">{stats.win_rate != null ? `${Number(stats.win_rate).toFixed(1)}%` : '0.0%'}</div></div>
@@ -821,7 +998,12 @@ function PaperTradesPanel({ paperTrades, onResetPaper }) {
                   <span className="text-slate-500">PnL live</span>
                   <span className={Number(a.pnl_live) >= 0 ? 'text-emerald-400' : 'text-red-400'}>{a.pnl_live != null ? Number(a.pnl_live).toFixed(2) : '–'}</span>
                   <span className="text-slate-500">PnL %</span><span className="text-slate-200">{a.pnl_percent != null ? `${Number(a.pnl_percent).toFixed(2)}%` : '–'}</span>
-                  <span className="text-slate-500">Lots</span><span className="text-slate-200">{a.lots != null ? String(a.lots) : '–'}</span>
+                  <span className="text-slate-500">Lots (qty/lot)</span>
+                  <span className="text-slate-200">
+                    {a.lots != null
+                      ? `${Number(a.lots).toFixed(2)}${a.qty != null && a.lot_size != null ? ` (${a.qty}/${a.lot_size})` : ''}`
+                      : '–'}
+                  </span>
                   <span className="text-slate-500">Entry time (UTC)</span>
                   <span className="text-slate-300 break-all">{a.entry_time_iso || '–'}</span>
                   <span className="text-slate-500">Trade age</span>
@@ -904,7 +1086,15 @@ function PaperTradesPanel({ paperTrades, onResetPaper }) {
               </div>
               <div>
                 <div className="text-slate-500 text-xs mb-0.5">Lots</div>
-                <div className="text-slate-200">{lastTrade.lots != null ? String(lastTrade.lots) : '–'}</div>
+                <div className="text-slate-200">{lastTrade.lots != null ? Number(lastTrade.lots).toFixed(2) : '–'}</div>
+              </div>
+              <div>
+                <div className="text-slate-500 text-xs mb-0.5">Qty</div>
+                <div className="text-slate-200">{lastTrade.qty != null ? String(lastTrade.qty) : '–'}</div>
+              </div>
+              <div>
+                <div className="text-slate-500 text-xs mb-0.5">Lot size</div>
+                <div className="text-slate-200">{lastTrade.lot_size != null ? String(lastTrade.lot_size) : '–'}</div>
               </div>
               <div>
                 <div className="text-slate-500 text-xs mb-0.5">PnL / lot</div>
@@ -932,6 +1122,53 @@ function PaperTradesPanel({ paperTrades, onResetPaper }) {
               ? 'No last closed trade in memory (stats are from log bootstrap). Open a new trade or reset to sync display.'
               : 'No closed paper trades yet — stats will appear after the first exit.'}
           </p>
+        )}
+      </div>
+      <div className="rounded-lg border border-slate-700 bg-slate-900/40 p-3">
+        <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Paper trades history</h3>
+        {historyRows.length > 0 ? (
+          <div className="overflow-auto max-h-72 border border-slate-700 rounded-lg">
+            <table className="w-full text-xs font-mono border-collapse">
+              <thead className="bg-slate-800/80 sticky top-0">
+                <tr>
+                  <th className="text-left p-2 text-slate-400 font-semibold">Exit time</th>
+                  <th className="text-left p-2 text-slate-400 font-semibold">Symbol</th>
+                  <th className="text-left p-2 text-slate-400 font-semibold">Signal</th>
+                  <th className="text-right p-2 text-slate-400 font-semibold">Entry</th>
+                  <th className="text-right p-2 text-slate-400 font-semibold">Exit</th>
+                  <th className="text-right p-2 text-slate-400 font-semibold">Lots</th>
+                  <th className="text-right p-2 text-slate-400 font-semibold">Qty</th>
+                  <th className="text-right p-2 text-slate-400 font-semibold">Lot size</th>
+                  <th className="text-right p-2 text-slate-400 font-semibold">PnL</th>
+                  <th className="text-left p-2 text-slate-400 font-semibold">Result</th>
+                  <th className="text-left p-2 text-slate-400 font-semibold">Reason</th>
+                </tr>
+              </thead>
+              <tbody>
+                {historyRows.map((r, i) => (
+                  <tr key={`${r.exit_time || r.entry_time || 'row'}_${i}`} className="border-t border-slate-700/50">
+                    <td className="p-2 text-slate-400 whitespace-nowrap">{r.exit_time || '–'}</td>
+                    <td className="p-2 text-slate-300">{r.symbol || '–'}</td>
+                    <td className={`p-2 ${String(r.signal || '').includes('CE') ? 'text-cyan-400' : String(r.signal || '').includes('PE') ? 'text-amber-400' : 'text-slate-400'}`}>
+                      {r.signal || '–'}
+                    </td>
+                    <td className="p-2 text-right text-slate-200">{r.entry != null ? Number(r.entry).toFixed(2) : '–'}</td>
+                    <td className="p-2 text-right text-slate-200">{r.exit != null ? Number(r.exit).toFixed(2) : '–'}</td>
+                    <td className="p-2 text-right text-slate-200">{r.lots != null ? Number(r.lots).toFixed(2) : '–'}</td>
+                    <td className="p-2 text-right text-slate-200">{r.qty != null ? String(r.qty) : '–'}</td>
+                    <td className="p-2 text-right text-slate-200">{r.lot_size != null ? String(r.lot_size) : '–'}</td>
+                    <td className={`p-2 text-right font-semibold ${Number(r.pnl) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {r.pnl != null ? Number(r.pnl).toFixed(2) : '–'}
+                    </td>
+                    <td className={`p-2 ${lastTradeResultClass(r.result)}`}>{r.result || '–'}</td>
+                    <td className="p-2 text-slate-500">{r.reason || '–'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="text-slate-500 text-sm">No closed paper trades in history yet.</p>
         )}
       </div>
       {Object.keys(guide).length > 0 && (
@@ -1213,28 +1450,39 @@ function DashboardGuideTable() {
   )
 }
 
-function ExecutionAlertStrip({ alerts }) {
-  const rows = Object.entries(alerts || {}).filter(([, v]) => v && v.status)
+function ExecutionAlertStrip({ alerts, symbols }) {
+  const allow = symbols && symbols.length ? new Set(symbols.map((s) => String(s).toUpperCase())) : null
+  const rows = Object.entries(alerts || {}).filter(
+    ([sym, v]) => v && v.status && (!allow || allow.has(String(sym).toUpperCase())),
+  )
   if (rows.length === 0) return null
   return (
     <section className="mb-4 space-y-2">
       <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Execution engine (entry / exit)</h2>
       {rows.map(([sym, a]) => {
         const st = String(a.status || '').toUpperCase()
+        const tp = String(a.type || st || '').toUpperCase()
         const border =
-          st === 'CONFIRMED'
+          tp === 'CONFIRMED'
             ? 'border-emerald-500/50 bg-emerald-500/10'
-            : st === 'EXIT'
+            : tp === 'EXIT'
               ? 'border-amber-500/50 bg-amber-500/10'
-              : st === 'NO_TRADE'
+              : tp === 'NO_TRADE' || tp === 'HOLD'
                 ? 'border-slate-500/60 bg-slate-800/40'
                 : 'border-slate-600 bg-slate-900/50'
         const stage = a.stage != null && String(a.stage).trim() !== '' ? String(a.stage).toUpperCase() : null
+        const qty = a.qty != null ? Number(a.qty) : null
+        const lotSize = String(sym || '').toUpperCase() === 'NIFTY' ? 65 : null
+        const paperQty = lotSize != null ? 20 * lotSize : null
+        const paperPnl =
+          qty != null && qty > 0 && paperQty != null && a.pnl != null
+            ? Number(a.pnl) * (paperQty / qty)
+            : null
         return (
           <div key={sym} className={`rounded-lg border p-3 font-mono text-sm ${border}`}>
             <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
               <span className="text-slate-500">{sym}</span>
-              <span className="font-semibold text-white">{st}</span>
+              <span className="font-semibold text-white">{tp || st}</span>
               {stage ? (
                 <span className="text-xs uppercase tracking-wide text-violet-300/90 border border-violet-500/40 rounded px-1.5 py-0.5">
                   {stage}
@@ -1249,7 +1497,11 @@ function ExecutionAlertStrip({ alerts }) {
               <span className="text-emerald-400">tgt {a.target ?? '–'}</span>
               <span className="text-red-400">sl {a.sl ?? '–'}</span>
               <span>trail {a.trailing_sl ?? '–'}</span>
-              <span>pnl {a.pnl != null ? a.pnl : '–'}</span>
+              <span>qty {qty != null && qty > 0 ? qty : '–'}</span>
+              <span>pnl(exec) {a.pnl != null ? Number(a.pnl).toFixed(2) : '–'}</span>
+              <span className="text-violet-300">
+                pnl(20 lots) {paperPnl != null ? Number(paperPnl).toFixed(2) : '–'}
+              </span>
               <span>conf {a.confidence != null ? `${Math.round(a.confidence)}%` : '–'}</span>
             </div>
             <div className="mt-1 text-[11px] text-slate-500 break-words">{a.reason}</div>
@@ -1257,6 +1509,301 @@ function ExecutionAlertStrip({ alerts }) {
           </div>
         )
       })}
+    </section>
+  )
+}
+
+function OpportunityAlertStrip({ alerts, symbols, positions }) {
+  const allow = symbols && symbols.length ? new Set(symbols.map((s) => String(s).toUpperCase())) : null
+  const rows = Object.entries(alerts || {}).filter(
+    ([sym, v]) => v && String(v.type || '').toUpperCase() === 'OPPORTUNITY' && (!allow || allow.has(String(sym).toUpperCase())),
+  )
+  if (rows.length === 0) return null
+  return (
+    <section className="mb-4 space-y-2">
+      <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Opportunity signals (non-executing)</h2>
+      {rows.map(([sym, a]) => {
+        const pos = positions?.[sym] || {}
+        const openSig = String(pos?.signal || '-')
+        return (
+          <div key={sym} className="rounded-lg border border-violet-500/40 bg-violet-500/10 p-3 font-mono text-sm">
+            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+              <span className="text-slate-400">{sym}</span>
+              <span className="text-white">OPEN {openSig}</span>
+              <span className="text-violet-300 font-semibold">OPPORTUNITY {String(a.signal || '-')}</span>
+              <span className="text-slate-400">{a.strike || '-'}</span>
+            </div>
+            <div className="mt-1 text-xs text-slate-300 flex flex-wrap gap-x-4 gap-y-0.5">
+              <span>entry {a.entry ?? '–'}</span>
+              <span className="text-emerald-400">tgt {a.target ?? '–'}</span>
+              <span className="text-red-400">sl {a.sl ?? '–'}</span>
+              <span>conf {a.confidence != null ? `${Math.round(a.confidence)}%` : '–'}</span>
+            </div>
+            <div className="mt-1 text-[11px] text-slate-500 break-words">{a.reason}</div>
+            <div className="mt-0.5 text-[10px] text-slate-600">{a.time}</div>
+          </div>
+        )
+      })}
+    </section>
+  )
+}
+
+function SymbolFilter({ value, onChange, symbols }) {
+  const list = Array.isArray(symbols) ? symbols : []
+  return (
+    <label className="flex items-center gap-2 text-xs text-slate-400">
+      <span>Symbol</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-slate-200"
+      >
+        <option value="ALL">ALL</option>
+        {list.map((s) => (
+          <option key={s} value={s}>
+            {s}
+          </option>
+        ))}
+      </select>
+    </label>
+  )
+}
+
+function latencyColorClass(ms) {
+  const v = Number(ms || 0)
+  if (v < 100) return 'text-emerald-400'
+  if (v <= 200) return 'text-amber-400'
+  return 'text-red-400'
+}
+
+function LatencyPanel({ latency, symbols, marketOpen, lastIndexTickAgeSec }) {
+  if (!marketOpen) {
+    return (
+      <section className="mb-8">
+        <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Latency meter</h2>
+        <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-3 text-xs font-mono text-slate-300">
+          <div className="text-red-300">MARKET CLOSED</div>
+          <div className="mt-1 text-slate-400">
+            Last tick: {lastIndexTickAgeSec != null ? `${Number(lastIndexTickAgeSec).toFixed(1)} s ago` : '--'}
+          </div>
+        </div>
+      </section>
+    )
+  }
+  const allow = symbols && symbols.length ? symbols : []
+  const rows = allow.map((s) => [s, latency?.[s] || null]).filter(([, r]) => Boolean(r))
+  if (rows.length === 0) return null
+  return (
+    <section className="mb-8">
+      <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Latency meter</h2>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {rows.map(([symbol, row]) => (
+          <div key={symbol} className="rounded-lg border border-slate-700 bg-slate-900/50 p-3 text-xs font-mono">
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-slate-300">{symbol}</span>
+              <span className="text-[10px] text-slate-500">{row.timestamp || '-'}</span>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              <div>
+                <div className="text-slate-500">WS</div>
+                <div className={ageColorClassSec((row.ws_latency_ms || 0) / 1000.0)}>
+                  {(Number(row.ws_latency_ms || 0) / 1000.0).toFixed(2)} s
+                </div>
+              </div>
+              <div>
+                <div className="text-slate-500">Processing</div>
+                <div className={latencyColorClass(row.compute_ms)}>{Number(row.compute_ms || 0).toFixed(1)} ms</div>
+              </div>
+              <div>
+                <div className="text-slate-500">Total</div>
+                <div className={latencyColorClass(row.total_latency_ms)}>{Number(row.total_latency_ms || 0).toFixed(1)} ms</div>
+              </div>
+            </div>
+            <div className="mt-2 text-slate-500 flex flex-wrap gap-x-3">
+              <span>avg {Number(row.rolling_avg_ms || 0).toFixed(1)} ms</span>
+              <span>max {Number(row.max_latency_ms || 0).toFixed(1)} ms</span>
+              <span>n {Number(row.sample_count || 0)}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function MarketCalendarStatus({ marketStatus }) {
+  const ms = marketStatus || {}
+  const isOpen = Boolean(ms.is_open)
+  const isHoliday = Boolean(ms.is_holiday)
+  const isExpiry = Boolean(ms.is_expiry)
+  const holidayName = ms.holiday_name || null
+  const expiryType = ms.expiry_type || null
+  const nextExpiry = ms.next_expiry || null
+  return (
+    <section className="mb-6">
+      <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-3 text-xs font-mono">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+          <span className={isOpen ? 'text-emerald-400' : 'text-red-300'}>
+            Market {isOpen ? 'OPEN' : 'CLOSED'}
+          </span>
+          {isHoliday ? (
+            <span className="text-amber-300">Holiday: {holidayName || 'Yes'}</span>
+          ) : (
+            <span className="text-slate-400">Holiday: No</span>
+          )}
+          <span className={isExpiry ? 'text-violet-300' : 'text-slate-400'}>
+            Expiry: {isExpiry ? `Yes (${expiryType || 'special'})` : 'No'}
+          </span>
+          <span className="text-slate-400">Next expiry: {nextExpiry || '--'}</span>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function SystemModeBadge({ systemMode }) {
+  const mode = String(systemMode?.mode || 'unknown').toUpperCase()
+  const reason = String(systemMode?.reason || '')
+  return (
+    <div className="rounded-lg border border-slate-700 bg-slate-900/50 px-3 py-2 text-xs font-mono text-slate-300">
+      <span className="text-slate-500">Mode </span>
+      <span className="text-cyan-300">{mode}</span>
+      {reason ? (
+        <>
+          <span className="text-slate-600"> | </span>
+          <span className="text-slate-500">{reason}</span>
+        </>
+      ) : null}
+    </div>
+  )
+}
+
+function StrategyIntelligencePanel({ symbols, marketIntelligence, strategyConfig }) {
+  const list = (symbols || []).map((s) => {
+    return {
+      symbol: s,
+      intel: marketIntelligence?.[s] || {},
+      cfg: strategyConfig?.[s] || {},
+    }
+  })
+  if (list.length === 0) return null
+  return (
+    <section className="mb-6">
+      <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-3">
+        <h3 className="text-xs uppercase tracking-wider text-slate-400 mb-2">Strategy Intelligence</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {list.map(({ symbol, intel, cfg }) => (
+            <div key={symbol} className="text-xs font-mono border border-slate-800 rounded p-2">
+              <div className="text-slate-300 mb-1">{symbol}</div>
+              <div className="text-slate-400">
+                Market: <span className="text-slate-200">{String(intel.market_type || 'RANGING')}</span>
+              </div>
+              <div className="text-slate-400">
+                Volatility: <span className="text-slate-200">{String(intel.volatility_level || 'LOW')}</span>
+              </div>
+              <div className="text-slate-400">
+                Trend: <span className="text-slate-200">{String(intel.trend_direction || 'SIDEWAYS')}</span>
+              </div>
+              <div className="text-slate-400">
+                Expiry: <span className="text-slate-200">{String(intel.is_expiry ? 'YES' : 'NO')}</span>
+              </div>
+              <div className="mt-1 text-slate-500">
+                Strategy mode: <span className="text-violet-300">{String(cfg.mode || 'NORMAL')}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function EngineSignalsSection({ data, symbols }) {
+  const allow = symbols && symbols.length ? symbols : []
+  const list = allow
+    .map((s) => [s, data?.[s] || null])
+    .filter(([, row]) => Boolean(row))
+  if (list.length === 0) return null
+  const engines = ['scalping', 'trend', 'smc', 'breakout', 'oi']
+  return (
+    <section className="mb-8">
+      <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Multi-engine signals (analysis loop)</h2>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {list.map(([symbol, row]) => (
+          <div key={symbol} className="rounded-lg border border-slate-700 bg-slate-900/50 p-3">
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-slate-300 font-semibold">{symbol}</div>
+              <div className="text-[11px] text-slate-500">
+                agree: {row?.agreement?.dominant_signal || 'NO_TRADE'} ({row?.agreement?.directional_count || 0} directional)
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              {engines.map((k) => {
+                const r = row?.[k] || {}
+                const sig = String(r.signal || 'NO_TRADE').toUpperCase()
+                const cls = sig === 'BUY_CE' ? 'text-cyan-400' : sig === 'BUY_PE' ? 'text-amber-400' : 'text-slate-400'
+                return (
+                  <div key={`${symbol}-${k}`} className="text-xs font-mono border border-slate-800 rounded px-2 py-1">
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-400">{k}</span>
+                      <span className={cls}>{sig}</span>
+                    </div>
+                    <div className="text-slate-500">conf {r.confidence != null ? `${Math.round(Number(r.confidence))}%` : '0%'}</div>
+                    <div className="text-slate-500 truncate" title={String(r.reason || '')}>{r.reason || '-'}</div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function StrategySignalsSection({ data, symbols }) {
+  const allow = symbols && symbols.length ? symbols : []
+  const list = allow
+    .map((s) => [s, data?.[s] || null])
+    .filter(([, row]) => Boolean(row))
+  if (list.length === 0) return null
+  const engines = ['trend', 'smc', 'breakout']
+  return (
+    <section className="mb-8">
+      <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Multi-strategy signals (isolated loop)</h2>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {list.map(([symbol, row]) => (
+          <div key={symbol} className="rounded-lg border border-slate-700 bg-slate-900/50 p-3">
+            <div className="text-slate-300 font-semibold mb-2">{symbol}</div>
+            <div className="space-y-1.5">
+              {engines.map((k) => {
+                const r = row?.[k] || {}
+                const sig = String(r.signal || 'NO_TRADE').toUpperCase()
+                const cls = sig === 'BUY_CE' ? 'text-cyan-400' : sig === 'BUY_PE' ? 'text-amber-400' : 'text-slate-400'
+                const stale = Boolean(r.stale)
+                return (
+                  <div key={`${symbol}-${k}`} className="text-xs font-mono border border-slate-800 rounded px-2 py-1">
+                    <div className="flex items-center justify-between">
+                      <span className="text-slate-400">{k}</span>
+                      <span className={cls}>{sig}</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-slate-500 mt-1">
+                      <span>entry</span><span className="text-slate-300">{r.entry != null ? Number(r.entry).toFixed(2) : '–'}</span>
+                      <span>ltp</span><span className="text-slate-300">{r.ltp != null ? Number(r.ltp).toFixed(2) : '–'}</span>
+                      <span>sl</span><span className="text-red-300">{r.sl != null ? Number(r.sl).toFixed(2) : '–'}</span>
+                      <span>target</span><span className="text-emerald-300">{r.target != null ? Number(r.target).toFixed(2) : '–'}</span>
+                    </div>
+                    <div className="text-slate-500">conf {r.confidence != null ? `${Math.round(Number(r.confidence))}%` : '0%'}</div>
+                    <div className={`text-[11px] ${stale ? 'text-red-300' : 'text-slate-500'}`}>
+                      {stale ? `STALE DATA (${Number(r.data_age_sec || 0).toFixed(1)}s)` : 'fresh data'}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
     </section>
   )
 }
@@ -1277,14 +1824,39 @@ export default function App() {
   const [paperTrades, setPaperTrades] = useState({})
   const [signalHistoryRows, setSignalHistoryRows] = useState([])
   const [enginePlatform, setEnginePlatform] = useState({})
+  const [heroZeroExpiry, setHeroZeroExpiry] = useState({})
   const [executionAlerts, setExecutionAlerts] = useState({})
-  const symbolOrder = ['NIFTY', 'SENSEX']
+  const [executionPositions, setExecutionPositions] = useState({})
+  const [opportunityAlerts, setOpportunityAlerts] = useState({})
+  const [engineSignals, setEngineSignals] = useState({})
+  const [strategySignals, setStrategySignals] = useState({})
+  const [latency, setLatency] = useState({})
+  const [dataStatus, setDataStatus] = useState({})
+  const [marketOpen, setMarketOpen] = useState(true)
+  const [marketStatus, setMarketStatus] = useState({})
+  const [marketIntelligence, setMarketIntelligence] = useState({})
+  const [strategyConfig, setStrategyConfig] = useState({})
+  const [systemMode, setSystemMode] = useState({})
+  const [lastIndexTickAgeSec, setLastIndexTickAgeSec] = useState(null)
+  const [symbolFilter, setSymbolFilter] = useState('ALL')
+  const [session, setSession] = useState({
+    sensex_session_enabled: false,
+    active_compute_symbols: ['NIFTY'],
+    sensex_option_ws_subscribed: false,
+  })
+  const [sensexToggleBusy, setSensexToggleBusy] = useState(false)
+  const [sensexRestartHint, setSensexRestartHint] = useState(null)
+  const allSymbolOrder =
+    Array.isArray(session.active_compute_symbols) && session.active_compute_symbols.length > 0
+      ? session.active_compute_symbols
+      : ['NIFTY']
+  const symbolOrder = symbolFilter === 'ALL' ? allSymbolOrder : allSymbolOrder.filter((s) => s === symbolFilter)
   const signalEntries = Object.entries(signals || {})
   const hasFinalSignal = Object.keys(finalSignal || {}).length > 0
   const hasMarketRegimeSection =
     Object.keys(marketRegime || {}).length > 0 ||
     signalEntries.some(([, s]) => s?.regime?.regime)
-  const hasWsHealthSection = ['NIFTY', 'SENSEX'].some((sym) => {
+  const hasWsHealthSection = symbolOrder.some((sym) => {
     const h = wsHealth?.[sym]?.coverage || {}
     return (h.strikes ?? 0) > 0 || (h.legs ?? 0) > 0
   })
@@ -1336,6 +1908,7 @@ export default function App() {
       Boolean(s?.liquidity_sweep?.detected)
   )
   const mlRlEntries = signalEntries.filter(([, s]) => Boolean(s?.ml?.label) || Boolean(s?.rl?.action))
+  const staleSymbols = marketOpen ? symbolOrder.filter((sym) => Number(dataStatus?.[sym]?.age_sec || 0) > 5) : []
 
   const placeOrder = (symbol, scalping, opts = {}) => {
     const useConsensus = opts.useConsensus === true
@@ -1376,22 +1949,56 @@ export default function App() {
     }
   }
 
+  const sessionRef = useRef(session)
+  sessionRef.current = session
+
   const POLL_FAST_MS = Number(import.meta.env.VITE_POLL_FAST_MS) || 1000
   const POLL_SLOW_MS = Number(import.meta.env.VITE_POLL_SLOW_MS) || 5000
 
   const loadFast = async () => {
     try {
-      const [marketRes, signalsRes, enginesRes, wsHealthRes, paperRes] = await Promise.all([
+      const [marketRes, signalsRes, enginesRes, engineSignalsRes, strategySignalsRes, latencyRes, modeRes, wsHealthRes, paperRes, hzExpRes] = await Promise.all([
         fetchMarket(),
         fetchSignals(),
         fetchEngines().catch(() => ({ engine_platform: {} })),
+        fetchEngineSignals().catch(() => ({ engine_signals: {} })),
+        fetchStrategySignals().catch(() => ({ strategy_signals: {} })),
+        fetchLatency().catch(() => ({ latency: {} })),
+        fetchSystemMode().catch(() => ({ system_mode: {}, market_status: {} })),
         fetchWsHealth().catch(() => ({ ws_health: {} })),
         fetchPaperTrades().catch(() => ({ paper_trades: {} })),
+        fetchHeroZeroExpiry().catch(() => ({ hero_zero_expiry: {} })),
       ])
       setMarket(marketRes.market || {})
+      setMarketOpen(Boolean(marketRes.market_open))
+      setMarketStatus(marketRes.market_status || {})
+      setMarketIntelligence(marketRes.market_intelligence || {})
+      setStrategyConfig(marketRes.strategy_config || {})
+      const nextSession = {
+        sensex_session_enabled: Boolean(marketRes.sensex_session_enabled),
+        active_compute_symbols:
+          Array.isArray(marketRes.active_compute_symbols) && marketRes.active_compute_symbols.length
+            ? marketRes.active_compute_symbols
+            : ['NIFTY'],
+        sensex_option_ws_subscribed: Boolean(marketRes.sensex_option_ws_subscribed),
+      }
+      setSession(nextSession)
+      sessionRef.current = nextSession
       setSignals(signalsRes.signals || {})
       setExecutionAlerts(signalsRes.execution_final_signal || {})
+      setExecutionPositions(signalsRes.execution_positions || {})
+      setOpportunityAlerts(signalsRes.execution_opportunity_signal || {})
       setEnginePlatform(enginesRes.engine_platform || {})
+      setEngineSignals(engineSignalsRes.engine_signals || {})
+      setStrategySignals(strategySignalsRes.strategy_signals || {})
+      setLatency(latencyRes.latency || {})
+      setDataStatus(latencyRes.data_status || {})
+      setMarketOpen(Boolean(latencyRes.market_open))
+      if (latencyRes.market_status) setMarketStatus(latencyRes.market_status)
+      setSystemMode(modeRes.system_mode || {})
+      if (modeRes.market_status) setMarketStatus(modeRes.market_status)
+      setLastIndexTickAgeSec(latencyRes.last_index_tick_age_sec ?? null)
+      setHeroZeroExpiry(hzExpRes?.hero_zero_expiry || {})
       setWsHealth(wsHealthRes?.ws_health || {})
       setPaperTrades(paperRes?.paper_trades || {})
       setModelVersion(signalsRes.model_version || marketRes.model_version || null)
@@ -1404,15 +2011,26 @@ export default function App() {
 
   const loadSlow = async () => {
     try {
-      const [oiRes, regimeRes, liqRes, stopRes, finalRes, histN, histS] = await Promise.all([
+      const sensexOn = Boolean(sessionRef.current.sensex_session_enabled)
+      const slowPromises = [
         fetchOi().catch(() => ({})),
         fetchMarketRegime().catch(() => ({ market_regime: {} })),
         fetchLiquidityMap().catch(() => ({ liquidity_map: {} })),
         fetchStopHunts().catch(() => ({ stop_hunts: {} })),
         fetchFinalSignal().catch(() => ({ final_signal: {} })),
         fetchSignalHistory('NIFTY', 100).catch(() => ({ history: [] })),
-        fetchSignalHistory('SENSEX', 100).catch(() => ({ history: [] })),
-      ])
+      ]
+      if (sensexOn) {
+        slowPromises.push(fetchSignalHistory('SENSEX', 100).catch(() => ({ history: [] })))
+      }
+      const slowResults = await Promise.all(slowPromises)
+      const oiRes = slowResults[0]
+      const regimeRes = slowResults[1]
+      const liqRes = slowResults[2]
+      const stopRes = slowResults[3]
+      const finalRes = slowResults[4]
+      const histN = slowResults[5]
+      const histS = sensexOn ? slowResults[6] : { history: [] }
       setOi(oiRes || {})
       setMarketRegime(regimeRes.market_regime || {})
       setLiquidityMap(liqRes.liquidity_map || {})
@@ -1429,6 +2047,24 @@ export default function App() {
       setError(null)
     } catch (e) {
       setError(e.message || 'Failed to fetch')
+    }
+  }
+
+  const handleSensexToggle = async (enabled) => {
+    setSensexToggleBusy(true)
+    setSensexRestartHint(null)
+    try {
+      const data = await setSensexSessionEnabled(enabled)
+      if (data.restart_required_for_sensex_option_chain) {
+        setSensexRestartHint('Restart the API to subscribe SENSEX option tokens (BFO).')
+      }
+      await loadFast()
+      await loadSlow()
+      setError(null)
+    } catch (e) {
+      setError(e.message || 'SENSEX session toggle failed')
+    } finally {
+      setSensexToggleBusy(false)
     }
   }
 
@@ -1450,7 +2086,15 @@ export default function App() {
         <div className="w-full max-w-[98vw] mx-auto px-2 py-2 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <h1 className="text-lg font-bold text-white font-mono">Free Quant Scalping AI</h1>
-            <LiveBadge />
+            <MarketStatusBadge marketOpen={marketOpen} />
+            <LatencyHeaderBadge latency={latency} symbols={symbolOrder} marketOpen={marketOpen} lastIndexTickAgeSec={lastIndexTickAgeSec} />
+            <SymbolFilter value={symbolFilter} onChange={setSymbolFilter} symbols={allSymbolOrder} />
+            <SensexSessionToggle
+              enabled={session.sensex_session_enabled}
+              busy={sensexToggleBusy}
+              onToggle={handleSensexToggle}
+              restartHint={sensexRestartHint}
+            />
           </div>
           <div className="flex items-center gap-6">
             <MarketStrip market={market} />
@@ -1476,8 +2120,17 @@ export default function App() {
             {error} — Is the backend running on port 8001?
           </div>
         )}
+        {staleSymbols.length > 0 && (
+          <div className="mb-4 px-4 py-2 rounded-lg bg-red-500/10 border border-red-500/40 text-red-300 text-sm font-mono">
+            STALE DATA - SIGNALS DISABLED ({staleSymbols.join(', ')})
+          </div>
+        )}
 
-        <ExecutionAlertStrip alerts={executionAlerts} />
+        <ExecutionAlertStrip alerts={executionAlerts} symbols={symbolOrder} />
+        <OpportunityAlertStrip alerts={opportunityAlerts} symbols={symbolOrder} positions={executionPositions} />
+        <SystemModeBadge systemMode={systemMode} />
+        <MarketCalendarStatus marketStatus={marketStatus} />
+        <StrategyIntelligencePanel symbols={symbolOrder} marketIntelligence={marketIntelligence} strategyConfig={strategyConfig} />
 
         <section className="mb-8">
           <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Scalping signals</h2>
@@ -1502,7 +2155,20 @@ export default function App() {
           </div>
         </section>
 
-        <EngineSignalsSection enginePlatform={enginePlatform} symbols={symbolOrder} />
+        <EngineSignalsSection data={engineSignals} symbols={symbolOrder} />
+        <StrategySignalsSection data={strategySignals} symbols={symbolOrder} />
+        <LatencyPanel latency={latency} symbols={symbolOrder} marketOpen={marketOpen} lastIndexTickAgeSec={lastIndexTickAgeSec} />
+
+        <section className="mb-8">
+          <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Hero Zero Expiry</h2>
+          <p className="text-xs text-slate-500 font-mono mb-2 max-w-4xl">
+            Separate engine: NIFTY only, expiry session days only. Scans ATM ±5 for volume / OI / premium spikes with index
+            direction filter. Does not connect to scalping, aggregate, or execution.
+          </p>
+          <HeroZeroExpiryCard payload={heroZeroExpiry} />
+        </section>
+
+        <PlatformEngineSignalsSection enginePlatform={enginePlatform} symbols={symbolOrder} />
 
         <section className="mb-8">
           <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wider mb-3">Placed orders (paper)</h2>
@@ -1518,6 +2184,8 @@ export default function App() {
             <span className="text-slate-400">aggregate.confidence ≥ 65</span>, and{' '}
             <span className="text-slate-400">risk.passed</span> (not blocked). Entry from aggregate side + chain LTP; exits: target or stop-loss only. Log:{' '}
             <span className="text-slate-400">logs/paper_trades.jsonl</span>
+            . SENSEX paper mirror is off when the SENSEX header toggle is off. Server one-shot clear on boot: set{' '}
+            <span className="text-slate-400">RESET_PAPER_ON_STARTUP=1</span>.
           </p>
           <div className="rounded-lg border border-slate-700 bg-slate-900/50 p-3">
             <PaperTradesPanel paperTrades={paperTrades} onResetPaper={handleResetPaperTrades} />

@@ -1,0 +1,23 @@
+{
+  "timezone": "Asia/Kolkata",
+  "holidays": [
+    { "date": "2026-01-26", "name": "Republic Day" },
+    { "date": "2026-03-06", "name": "Holi" },
+    { "date": "2026-04-14", "name": "Dr. Babasaheb Ambedkar Jayanti" },
+    { "date": "2026-05-01", "name": "Maharashtra Day" },
+    { "date": "2026-08-15", "name": "Independence Day" },
+    { "date": "2026-10-02", "name": "Gandhi Jayanti" },
+    { "date": "2026-11-12", "name": "Diwali Laxmi Pujan" },
+    { "date": "2026-12-25", "name": "Christmas" }
+  ],
+  "expiries": {
+    "NIFTY": [
+      { "date": "2026-04-16", "type": "weekly" },
+      { "date": "2026-04-30", "type": "monthly" }
+    ],
+    "SENSEX": [
+      { "date": "2026-04-17", "type": "weekly" },
+      { "date": "2026-04-24", "type": "monthly" }
+    ]
+  }
+}

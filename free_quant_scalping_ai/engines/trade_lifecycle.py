@@ -96,9 +96,22 @@ def _build_final_signal(
     confidence: Optional[float],
     reason: str,
     stage: str = "ENTRY",
+    qty: Optional[int] = None,
 ) -> Dict[str, Any]:
+    sig_type = "HOLD"
+    st_u = str(status or "").upper()
+    sg_u = str(stage or "").upper()
+    if st_u == "EXIT":
+        sig_type = "EXIT"
+    elif st_u == "CONFIRMED" and sg_u == "ENTRY":
+        sig_type = "CONFIRMED"
+    elif st_u == "CONFIRMED" and sg_u == "HOLD":
+        sig_type = "HOLD"
+    elif st_u == "NO_TRADE":
+        sig_type = "HOLD"
     return {
         "status": status,
+        "type": sig_type,
         "stage": stage,
         "symbol": symbol,
         "signal": signal,
@@ -109,6 +122,7 @@ def _build_final_signal(
         "sl": sl,
         "trailing_sl": trailing_sl,
         "pnl": round(float(pnl or 0.0), 4),
+        "qty": int(qty) if qty is not None else None,
         "confidence": confidence,
         "reason": reason,
         "time": datetime.now(timezone.utc).isoformat(),
@@ -200,6 +214,23 @@ class ExecutionLifecycle:
         return max(1, min(q, _env_int("EXEC_MAX_QTY", 500)))
 
     @staticmethod
+    def _strategy_multipliers(state: Dict[str, Any], symbol: str) -> tuple[float, float, float]:
+        cfg = ((state.get("strategy_config") or {}).get(symbol) or {}) if isinstance(state, dict) else {}
+        try:
+            conf_m = float(cfg.get("confidence_multiplier") or 1.0)
+        except (TypeError, ValueError):
+            conf_m = 1.0
+        try:
+            tgt_m = float(cfg.get("target_multiplier") or 1.0)
+        except (TypeError, ValueError):
+            tgt_m = 1.0
+        try:
+            sl_m = float(cfg.get("stop_multiplier") or 1.0)
+        except (TypeError, ValueError):
+            sl_m = 1.0
+        return conf_m, tgt_m, sl_m
+
+    @staticmethod
     def _maybe_telegram_execution(state: Dict[str, Any], sym: str) -> None:
         """Non-trading Telegram hook; must never affect lifecycle."""
         try:
@@ -236,6 +267,22 @@ class ExecutionLifecycle:
         sym = symbol.upper()
         ts = self._get(state, sym)
         final_bucket = state.setdefault("execution_final_signal", {})
+        conf_m, tgt_m, sl_m = self._strategy_multipliers(state, sym)
+        confidence = max(0.0, min(100.0, float(confidence or 0.0) * conf_m))
+        if entry is not None and target is not None:
+            try:
+                e = float(entry)
+                t = float(target)
+                target = e + max(0.0, t - e) * tgt_m
+            except (TypeError, ValueError):
+                pass
+        if entry is not None and stoploss is not None:
+            try:
+                e = float(entry)
+                s = float(stoploss)
+                stoploss = e - max(0.0, e - s) * sl_m
+            except (TypeError, ValueError):
+                pass
 
         # --- OPEN: manage position ---
         if ts["status"] == "OPEN" and ts.get("strike_num") is not None and ts.get("opt_type"):
@@ -369,6 +416,7 @@ class ExecutionLifecycle:
                         sl=float(sl),
                         trailing_sl=float(trail_sl_f),
                         pnl=float(ts["pnl"]),
+                        qty=int(ts.get("qty") or 0),
                         confidence=float(confidence),
                         reason="position_open",
                     )
@@ -424,6 +472,7 @@ class ExecutionLifecycle:
                     sl=float(stoploss) if stoploss is not None else None,
                     trailing_sl=float(stoploss) if stoploss is not None else None,
                     pnl=0.0,
+                    qty=self._qty_for_risk(float(entry), float(stoploss)),
                     confidence=float(confidence),
                     reason=skip_entry_reason,
                 )
@@ -472,6 +521,7 @@ class ExecutionLifecycle:
             sl=float(stoploss),
             trailing_sl=float(stoploss),
             pnl=0.0,
+            qty=qty,
             confidence=float(confidence),
             reason="entry_confirmed",
         )
@@ -512,6 +562,7 @@ class ExecutionLifecycle:
             sl=ts.get("sl"),
             trailing_sl=ts.get("trailing_sl"),
             pnl=pnl,
+            qty=int(ts.get("qty") or 0),
             confidence=float(confidence),
             reason=reason,
         )

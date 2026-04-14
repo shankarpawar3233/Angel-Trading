@@ -1,0 +1,7 @@
+{
+  "mode": "EXPIRY",
+  "target_multiplier": 1.15,
+  "stop_multiplier": 1.1,
+  "confidence_multiplier": 1.05,
+  "aggregate_confidence_multiplier": 1.05
+}

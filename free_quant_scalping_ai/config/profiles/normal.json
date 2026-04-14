@@ -1,0 +1,7 @@
+{
+  "mode": "NORMAL",
+  "target_multiplier": 1.0,
+  "stop_multiplier": 1.0,
+  "confidence_multiplier": 1.0,
+  "aggregate_confidence_multiplier": 1.0
+}
