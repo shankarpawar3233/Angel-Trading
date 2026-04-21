@@ -1,0 +1,60 @@
+[
+  {
+    "symbol": "NIFTY",
+    "index_price": 22510.25,
+    "option_chain": {
+      "22450": {
+        "CE": {"ltp": 126.5, "oi": 315000, "volume": 82000},
+        "PE": {"ltp": 84.1, "oi": 252000, "volume": 61000}
+      },
+      "22500": {
+        "CE": {"ltp": 101.3, "oi": 402000, "volume": 145000},
+        "PE": {"ltp": 99.4, "oi": 391500, "volume": 149000}
+      },
+      "22550": {
+        "CE": {"ltp": 79.8, "oi": 210000, "volume": 54000},
+        "PE": {"ltp": 118.3, "oi": 307000, "volume": 88000}
+      }
+    },
+    "meta": {"momentum": 0.82, "price_vs_vwap": 0.0021}
+  },
+  {
+    "symbol": "NIFTY",
+    "index_price": 22532.4,
+    "option_chain": {
+      "22450": {
+        "CE": {"ltp": 139.2, "oi": 322000, "volume": 84500},
+        "PE": {"ltp": 75.3, "oi": 247000, "volume": 59800}
+      },
+      "22500": {
+        "CE": {"ltp": 113.7, "oi": 409000, "volume": 152000},
+        "PE": {"ltp": 90.9, "oi": 382500, "volume": 138000}
+      },
+      "22550": {
+        "CE": {"ltp": 89.6, "oi": 216000, "volume": 56200},
+        "PE": {"ltp": 108.7, "oi": 314500, "volume": 90500}
+      }
+    },
+    "meta": {"momentum": 0.96, "price_vs_vwap": 0.0034}
+  },
+  {
+    "symbol": "SENSEX",
+    "index_price": 74112.8,
+    "option_chain": {
+      "74000": {
+        "CE": {"ltp": 218.4, "oi": 155000, "volume": 38000},
+        "PE": {"ltp": 205.6, "oi": 164000, "volume": 42000}
+      },
+      "74100": {
+        "CE": {"ltp": 198.1, "oi": 171000, "volume": 41000},
+        "PE": {"ltp": 214.2, "oi": 183000, "volume": 46900}
+      },
+      "74200": {
+        "CE": {"ltp": 176.3, "oi": 131500, "volume": 35100},
+        "PE": {"ltp": 228.9, "oi": 196200, "volume": 53400}
+      }
+    },
+    "meta": {"momentum": -0.74, "price_vs_vwap": -0.0016}
+  }
+]
+

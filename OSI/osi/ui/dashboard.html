@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OSI Dashboard</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --panel: #111827;
+      --panel-2: #1f2937;
+      --text: #e5e7eb;
+      --muted: #9ca3af;
+      --ok: #22c55e;
+      --warn: #f59e0b;
+      --bad: #ef4444;
+      --accent: #38bdf8;
+      --border: #374151;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      color: var(--text);
+      background: var(--bg);
+    }
+    .wrap { max-width: 1400px; margin: 0 auto; padding: 16px; }
+    .title {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 12px;
+    }
+    .status { font-size: 14px; color: var(--muted); }
+    .status .dot {
+      display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+      margin-right: 6px; background: var(--bad);
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 12px;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+    }
+    .card h3 { margin: 0 0 10px 0; font-size: 15px; color: var(--accent); }
+    .kpi { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+    .kpi-item { background: var(--panel-2); border-radius: 6px; padding: 8px; }
+    .kpi-item .label { font-size: 12px; color: var(--muted); }
+    .kpi-item .value { font-size: 18px; font-weight: bold; margin-top: 4px; }
+    .full { grid-column: span 12; }
+    .span-8 { grid-column: span 8; }
+    .span-6 { grid-column: span 6; }
+    .span-4 { grid-column: span 4; }
+    .span-3 { grid-column: span 3; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; border-bottom: 1px solid var(--border); padding: 8px 6px; }
+    th { color: var(--muted); font-weight: 600; }
+    .pill {
+      display: inline-block; padding: 3px 8px; border-radius: 999px; font-size: 12px;
+      background: var(--panel-2); border: 1px solid var(--border);
+    }
+    .buy-ce { color: var(--ok); }
+    .buy-pe { color: #f97316; }
+    .none { color: var(--muted); }
+    .small { font-size: 12px; color: var(--muted); }
+    pre {
+      margin: 0; padding: 8px; border-radius: 6px; background: #020617;
+      border: 1px solid var(--border); overflow: auto; max-height: 260px; font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="title">
+      <h2>Options Signal Intelligence Dashboard</h2>
+      <div class="status"><span class="dot" id="wsDot"></span><span id="wsText">Disconnected</span></div>
+    </div>
+
+    <div class="grid">
+      <div class="card full">
+        <h3>Latency And Processing Metrics</h3>
+        <div class="kpi" id="metricsKpi"></div>
+      </div>
+
+      <div class="card span-8">
+        <h3>Active Signals</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th><th>Symbol</th><th>Signal</th><th>Confidence</th><th>Status</th>
+              <th>Strike</th><th>Entry</th><th>LTP</th><th>SL</th><th>Target</th><th>Exit</th><th>Option</th>
+            </tr>
+          </thead>
+          <tbody id="signalsBody"></tbody>
+        </table>
+      </div>
+
+      <div class="card span-4">
+        <h3>Latest Live Decision</h3>
+        <div id="liveInfo" class="small">Waiting for live payload...</div>
+      </div>
+
+      <div class="card span-6">
+        <h3>Engine Outputs (Latest Tick)</h3>
+        <table>
+          <thead><tr><th>Engine</th><th>Signal</th><th>Strength</th></tr></thead>
+          <tbody id="enginesBody"></tbody>
+        </table>
+      </div>
+
+      <div class="card span-6">
+        <h3>Consensus Snapshot</h3>
+        <pre id="consensusJson">{}</pre>
+      </div>
+
+      <div class="card full">
+        <h3>Non-Active Trade History</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Time</th><th>Symbol</th><th>Signal</th><th>Confidence</th><th>Status</th>
+              <th>Strike</th><th>Entry</th><th>LTP</th><th>SL</th><th>Target</th><th>Exit</th><th>PnL</th>
+            </tr>
+          </thead>
+          <tbody id="historyBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const state = { live: null };
+
+    function signalClass(sig) {
+      if (sig === "BUY_CE") return "buy-ce";
+      if (sig === "BUY_PE") return "buy-pe";
+      return "none";
+    }
+
+    function num(v, d = 2) {
+      if (v === null || v === undefined || Number.isNaN(Number(v))) return "-";
+      return Number(v).toFixed(d);
+    }
+
+    function renderMetrics(metrics) {
+      const items = [
+        ["Ticks Processed", metrics.ticks_processed],
+        ["Pipeline Errors", metrics.pipeline_errors],
+        ["Avg Total Latency (ms)", num(metrics.avg_total_signal_latency_ms, 1)],
+        ["Tick -> Process (ms)", num(metrics.tick_to_process_latency_ms, 1)],
+        ["Process -> Signal (ms)", num(metrics.process_to_signal_latency_ms, 1)],
+        ["Total Signal (ms)", num(metrics.total_signal_latency_ms, 1)],
+        ["Avg Latency (ms)", num(metrics.average_latency_ms, 1)],
+        ["Max Latency (ms)", num(metrics.max_latency_ms, 1)],
+        ["Latency Budget", metrics.within_latency_budget ? "OK" : "Above 500"],
+      ];
+      const el = document.getElementById("metricsKpi");
+      el.innerHTML = items.map(([k, v]) =>
+        `<div class="kpi-item"><div class="label">${k}</div><div class="value">${v}</div></div>`
+      ).join("");
+    }
+
+    function renderSignals(cards) {
+      const body = document.getElementById("signalsBody");
+      if (!cards.length) {
+        body.innerHTML = `<tr><td colspan="13" class="small">No active signals</td></tr>`;
+        return;
+      }
+      body.innerHTML = cards.map(row => `
+        <tr>
+          <td>${row.signal_id}</td>
+          <td>${row.symbol}</td>
+          <td><span class="pill ${signalClass(row.signal)}">${row.signal}</span></td>
+          <td>${num(row.confidence, 1)}</td>
+          <td>${row.status}</td>
+          <td>${num(row.strike, 0)}</td>
+          <td>${num(row.entry_price)}</td>
+          <td>${num(row.current_ltp)}</td>
+          <td>${num(row.stop_loss)}</td>
+          <td>${num(row.target_price)}</td>
+          <td>${num(row.exit_price)}</td>
+          <td>${row.option_symbol}</td>
+        </tr>
+      `).join("");
+    }
+
+    function renderHistory(rows) {
+      const body = document.getElementById("historyBody");
+      if (!rows.length) {
+        body.innerHTML = `<tr><td colspan="12" class="small">No non-active trades yet</td></tr>`;
+        return;
+      }
+      body.innerHTML = rows.slice(0, 30).map(row => `
+        <tr>
+          <td>${row.created_at || "-"}</td>
+          <td>${row.symbol || "-"}</td>
+          <td><span class="pill ${signalClass(row.signal || row.engine_signal)}">${row.signal || row.engine_signal || "-"}</span></td>
+          <td>${num(row.confidence, 1)}</td>
+          <td>${row.status || "-"}</td>
+          <td>${num(row.strike, 0)}</td>
+          <td>${num(row.entry_price)}</td>
+          <td>${num(row.current_ltp)}</td>
+          <td>${num(row.stop_loss)}</td>
+          <td>${num(row.target_price)}</td>
+          <td>${num(row.exit_price)}</td>
+          <td>${num(row.pnl)}</td>
+        </tr>
+      `).join("");
+    }
+
+    function renderLive(payload) {
+      state.live = payload;
+      const engines = payload.engine_outputs || [];
+      const engineBody = document.getElementById("enginesBody");
+      if (!engines.length) {
+        engineBody.innerHTML = `<tr><td colspan="3" class="small">No engine output yet</td></tr>`;
+      } else {
+        engineBody.innerHTML = engines.map(e => `
+          <tr>
+            <td>${e.engine}</td>
+            <td><span class="pill ${signalClass(e.signal)}">${e.signal}</span></td>
+            <td>${num(e.strength, 3)}</td>
+          </tr>
+        `).join("");
+      }
+
+      document.getElementById("consensusJson").textContent = JSON.stringify(payload.consensus || {}, null, 2);
+      document.getElementById("liveInfo").innerHTML = `
+        <div><b>Symbol:</b> ${payload.symbol || "-"}</div>
+        <div><b>Index Price:</b> ${num(payload.index_price)}</div>
+        <div><b>Regime:</b> ${payload.regime || "-"}</div>
+        <div><b>Timestamp:</b> ${payload.timestamp || "-"}</div>
+        <div><b>Candle:</b> ${(payload.candle && payload.candle.timeframe) ? payload.candle.timeframe : "-"}</div>
+      `;
+    }
+
+    async function fetchJson(path) {
+      const res = await fetch(path);
+      if (!res.ok) throw new Error(`${path} failed: ${res.status}`);
+      return res.json();
+    }
+
+    async function refreshRest() {
+      try {
+        const [signals, metrics, history] = await Promise.all([
+          fetchJson("/signals"),
+          fetchJson("/metrics"),
+          fetchJson("/history?limit=100"),
+        ]);
+        renderSignals(signals.cards || []);
+        renderMetrics(metrics || {});
+        renderHistory(history.non_active_history || []);
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    function openLiveSocket() {
+      const protocol = location.protocol === "https:" ? "wss" : "ws";
+      const ws = new WebSocket(`${protocol}://${location.host}/signals/live`);
+      const dot = document.getElementById("wsDot");
+      const text = document.getElementById("wsText");
+
+      ws.onopen = () => {
+        dot.style.background = "#22c55e";
+        text.textContent = "Connected";
+      };
+      ws.onclose = () => {
+        dot.style.background = "#ef4444";
+        text.textContent = "Disconnected (retrying...)";
+        setTimeout(openLiveSocket, 1500);
+      };
+      ws.onerror = () => {
+        dot.style.background = "#f59e0b";
+        text.textContent = "WebSocket error";
+      };
+      ws.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+          renderLive(payload);
+          if (payload.cards) renderSignals(payload.cards);
+        } catch (err) {
+          console.error("Bad WS payload", err);
+        }
+      };
+    }
+
+    refreshRest();
+    openLiveSocket();
+    setInterval(refreshRest, 5000);
+  </script>
+</body>
+</html>
+
