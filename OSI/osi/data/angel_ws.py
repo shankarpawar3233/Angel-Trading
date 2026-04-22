@@ -49,9 +49,14 @@ class AngelWebSocketSource:
         self._last_tick_log_ts: float = 0.0
         self._emit_skip_log_ts: Dict[str, float] = {}
         self._last_any_tick_ts: float = 0.0
+        self._last_exchange_ts_by_symbol: Dict[str, datetime] = {}
         self._bridge_queue: queue.Queue[MarketTick] = queue.Queue(maxsize=20000)
         self._lock = threading.RLock()
         self._auth_payload: Optional[Dict[str, str]] = None
+        self._dropped_payload_count: int = 0
+        self._last_dropped_payload_log_ts: float = 0.0
+        self._awaiting_first_tick_after_reconnect: bool = False
+        self._reconnect_open_ts: float = 0.0
 
     async def start(self, handler: TickHandler) -> None:
         self._running = True
@@ -166,6 +171,8 @@ class AngelWebSocketSource:
 
     def _on_open(self, _wsapp: Any) -> None:
         logger.info("SmartWebSocketV2 on_open received, subscribing index tokens")
+        self._awaiting_first_tick_after_reconnect = True
+        self._reconnect_open_ts = time.time()
         self._subscribe_index_tokens()
         self._resubscribe_option_tokens()
 
@@ -182,8 +189,19 @@ class AngelWebSocketSource:
 
     def _on_data(self, _wsapp: Any, message: Any) -> None:
         rows = self._extract_rows(message)
+        if not rows:
+            self._dropped_payload_count += 1
+            now = time.time()
+            if (now - self._last_dropped_payload_log_ts) >= 5.0:
+                self._last_dropped_payload_log_ts = now
+                logger.warning("Dropped websocket payload(s) parse_empty total_dropped=%s", self._dropped_payload_count)
+            return
         now = time.time()
         self._last_any_tick_ts = now
+        if self._awaiting_first_tick_after_reconnect and self._reconnect_open_ts > 0:
+            reconnect_ms = (now - self._reconnect_open_ts) * 1000.0
+            self._awaiting_first_tick_after_reconnect = False
+            logger.info("Reconnect-to-first-tick latency_ms=%.2f", reconnect_ms)
         self._raw_tick_count += len(rows)
         if rows and (now - self._last_tick_log_ts) >= 5.0:
             self._last_tick_log_ts = now
@@ -202,11 +220,14 @@ class AngelWebSocketSource:
             ltp = norm.get("ltp")
             if ltp is None:
                 continue
+            exch_ts = norm.get("exchange_timestamp")
 
             symbol = self._index_symbol_from_token(token)
             if symbol:
                 with self._lock:
                     self._index_prices[symbol] = ltp
+                    if isinstance(exch_ts, datetime):
+                        self._last_exchange_ts_by_symbol[symbol] = exch_ts
                 self._maybe_refresh_option_tokens(symbol, ltp)
                 self._emit(symbol, now)
                 continue
@@ -225,7 +246,12 @@ class AngelWebSocketSource:
                     "volume": float(norm.get("volume") or 0.0),
                     "oi": float(norm.get("oi") or 0.0),
                     "expiry": str(meta.get("expiry") or ""),
+                    "option_timestamp": (
+                        float(exch_ts.timestamp()) if isinstance(exch_ts, datetime) else float(now)
+                    ),
                 }
+                if isinstance(exch_ts, datetime):
+                    self._last_exchange_ts_by_symbol[symbol] = exch_ts
             self._emit(symbol, now)
 
     def _emit(self, symbol: str, now_epoch: float) -> None:
@@ -234,6 +260,10 @@ class AngelWebSocketSource:
         with self._lock:
             index_price = self._index_prices.get(symbol)
             chain = self._option_chain.get(symbol, {})
+            exch_ts = self._last_exchange_ts_by_symbol.get(symbol)
+        fresh_chain = self._fresh_option_chain(chain, now_epoch)
+        if fresh_chain:
+            chain = fresh_chain
         if index_price is None or not chain:
             last = float(self._emit_skip_log_ts.get(symbol) or 0.0)
             if (now_epoch - last) >= 5.0:
@@ -245,10 +275,28 @@ class AngelWebSocketSource:
                     len(chain),
                 )
             return
+        if isinstance(exch_ts, datetime):
+            real_age_ms = max(0.0, (datetime.fromtimestamp(now_epoch, tz=timezone.utc) - exch_ts).total_seconds() * 1000.0)
+            # Many exchange timestamps arrive only with second precision.
+            # For coarse timestamps, allow extra slack to avoid false stale drops.
+            max_age_ms = float(settings.ws_max_tick_age_ms)
+            coarse_ts = exch_ts.microsecond == 0
+            if coarse_ts:
+                max_age_ms = max(max_age_ms, 1500.0)
+            if real_age_ms > max_age_ms:
+                logger.warning(
+                    "Dropping stale tick symbol=%s real_latency_ms=%.2f max_ms=%.2f coarse_ts=%s",
+                    symbol,
+                    real_age_ms,
+                    max_age_ms,
+                    coarse_ts,
+                )
+                return
         tick = MarketTick(
             symbol=symbol,  # type: ignore[arg-type]
             index_price=float(index_price),
-            timestamp=datetime.now(timezone.utc),
+            exchange_timestamp=exch_ts,
+            timestamp=exch_ts or datetime.now(timezone.utc),
             received_at=datetime.fromtimestamp(now_epoch, tz=timezone.utc),
             option_chain=chain,
             meta={"source": "angel_ws_v2"},
@@ -256,7 +304,14 @@ class AngelWebSocketSource:
         try:
             self._bridge_queue.put_nowait(tick)
         except queue.Full:
-            logger.warning("Tick bridge queue full, dropping tick symbol=%s", symbol)
+            try:
+                self._bridge_queue.get_nowait()
+                self._bridge_queue.put_nowait(tick)
+                logger.warning("Tick bridge queue full, dropped_oldest_enqueued_new symbol=%s", symbol)
+            except queue.Empty:
+                logger.warning("Tick bridge queue full and empty-on-pop race, dropping tick symbol=%s", symbol)
+            except queue.Full:
+                logger.warning("Tick bridge queue still full, dropping tick symbol=%s", symbol)
 
     def _maybe_refresh_option_tokens(self, symbol: str, spot: float) -> None:
         step = 50.0 if symbol == "NIFTY" else 100.0
@@ -480,7 +535,87 @@ class AngelWebSocketSource:
             "ltp": self._extract_ltp(row),
             "volume": self._extract_float(row, ["volume_trade_for_the_day", "volume", "v", "vol"]),
             "oi": self._extract_float(row, ["open_interest", "oi", "openInterest"]),
+            "exchange_timestamp": self._extract_exchange_timestamp(row),
         }
+
+    @staticmethod
+    def _extract_exchange_timestamp(row: Dict[str, Any]) -> Optional[datetime]:
+        candidates = [
+            row.get("exchange_timestamp"),
+            row.get("exchangeTime"),
+            row.get("exch_feed_time"),
+            row.get("last_traded_time"),
+            row.get("ltt"),
+            row.get("timestamp"),
+            row.get("ft"),
+        ]
+        for raw in candidates:
+            if raw is None:
+                continue
+            # epoch in sec/ms/us/ns
+            try:
+                if isinstance(raw, (int, float)) or (isinstance(raw, str) and raw.strip().lstrip("-").isdigit()):
+                    iv = int(float(str(raw).strip()))
+                    if iv <= 0:
+                        continue
+                    if iv > 10**18:
+                        iv = iv // 10**9
+                    elif iv > 10**15:
+                        iv = iv // 10**6
+                    elif iv > 10**12:
+                        iv = iv // 10**3
+                    dt = datetime.fromtimestamp(iv, tz=timezone.utc)
+                    return dt
+            except Exception:
+                pass
+            if isinstance(raw, str):
+                txt = raw.strip()
+                if not txt:
+                    continue
+                for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%d-%m-%Y %H:%M:%S"):
+                    try:
+                        dt = datetime.strptime(txt, fmt).replace(tzinfo=timezone.utc)
+                        return dt
+                    except ValueError:
+                        continue
+                try:
+                    dt = datetime.fromisoformat(txt.replace("Z", "+00:00"))
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    return dt.astimezone(timezone.utc)
+                except Exception:
+                    continue
+        return None
+
+    @staticmethod
+    def _fresh_option_chain(chain: Dict[str, Dict[str, Dict[str, float]]], now_epoch: float) -> Dict[str, Dict[str, Dict[str, float]]]:
+        out: Dict[str, Dict[str, Dict[str, float]]] = {}
+        stale_sec = float(settings.option_data_stale_sec)
+        for strike, row in (chain or {}).items():
+            ce = (row or {}).get("CE") or {}
+            pe = (row or {}).get("PE") or {}
+            ce_age = now_epoch - float(ce.get("option_timestamp") or 0.0) if ce else 1e9
+            pe_age = now_epoch - float(pe.get("option_timestamp") or 0.0) if pe else 1e9
+            new_row: Dict[str, Dict[str, float]] = {}
+            if ce and ce_age <= stale_sec:
+                new_row["CE"] = {
+                    "ltp": float(ce.get("ltp") or 0.0),
+                    "volume": float(ce.get("volume") or 0.0),
+                    "oi": float(ce.get("oi") or 0.0),
+                    "expiry": str(ce.get("expiry") or ""),
+                    "option_timestamp": float(ce.get("option_timestamp") or 0.0),
+                }
+            if pe and pe_age <= stale_sec:
+                new_row["PE"] = {
+                    "ltp": float(pe.get("ltp") or 0.0),
+                    "volume": float(pe.get("volume") or 0.0),
+                    "oi": float(pe.get("oi") or 0.0),
+                    "expiry": str(pe.get("expiry") or ""),
+                    "option_timestamp": float(pe.get("option_timestamp") or 0.0),
+                }
+            if new_row:
+                out[strike] = new_row
+        return out
 
     @staticmethod
     def _extract_float(row: Dict[str, Any], keys: List[str]) -> float:

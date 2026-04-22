@@ -23,6 +23,21 @@ def build_router(pipeline: OSIPipeline):
             "ui_schema": "dashboard_card_v1",
         }
 
+    @router.get("/signals/active")
+    async def get_signals_active() -> Dict:
+        rows = pipeline.signal_manager.snapshot_active_signals()
+        return {"active_signals": rows, "count": len(rows)}
+
+    @router.get("/signals/history")
+    async def get_signals_history(limit: int = 200) -> Dict:
+        rows = pipeline.signal_manager.snapshot_history()[-min(limit, 200) :]
+        return {"history": rows, "count": len(rows)}
+
+    @router.get("/signals/rejected")
+    async def get_signals_rejected(limit: int = 200) -> Dict:
+        rows = pipeline.signal_manager.snapshot_rejected()[-min(limit, 200) :]
+        return {"rejected_signals": rows, "count": len(rows)}
+
     @router.get("/history")
     async def get_history(limit: int = 100) -> Dict:
         db_rows = await pipeline.postgres_repo.fetch_history(limit=min(limit, 500))
@@ -54,10 +69,14 @@ def build_router(pipeline: OSIPipeline):
                 payload = await queue.get()
                 await ws.send_json(payload)
         except WebSocketDisconnect:
-            pipeline.unsubscribe(queue)
+            pass
         except asyncio.CancelledError:
-            pipeline.unsubscribe(queue)
             raise
+        except Exception:
+            # Ensure broken websocket sessions do not leak subscriber queues.
+            pass
+        finally:
+            pipeline.unsubscribe(queue)
 
     @router.get("/dashboard")
     async def get_dashboard():

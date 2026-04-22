@@ -65,6 +65,9 @@
     .buy-ce { color: var(--ok); }
     .buy-pe { color: #f97316; }
     .none { color: var(--muted); }
+    .pnl-pos { color: var(--ok); font-weight: 600; }
+    .pnl-neg { color: var(--bad); font-weight: 600; }
+    .status-active { color: #60a5fa; font-weight: 600; }
     .small { font-size: 12px; color: var(--muted); }
     pre {
       margin: 0; padding: 8px; border-radius: 6px; background: #020617;
@@ -83,6 +86,33 @@
       <div class="card full">
         <h3>Latency And Processing Metrics</h3>
         <div class="kpi" id="metricsKpi"></div>
+      </div>
+
+      <div class="card full">
+        <h3>Performance Metrics</h3>
+        <div class="kpi" id="performanceKpi"></div>
+      </div>
+
+      <div class="card full">
+        <h3>Last 5 Trades Result</h3>
+        <table>
+          <thead>
+            <tr><th>Time</th><th>ID</th><th>Symbol</th><th>Signal</th><th>Entry</th><th>Exit</th><th>PnL</th></tr>
+          </thead>
+          <tbody id="lastTradesBody"></tbody>
+        </table>
+      </div>
+
+      <div class="card full">
+        <h3>TRADE MONITOR</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th><th>Symbol</th><th>Type</th><th>Strategy</th><th>Entry</th><th>LTP</th><th>SL</th><th>Target</th><th>PnL</th><th>Status</th><th>Time</th>
+            </tr>
+          </thead>
+          <tbody id="tradeMonitorBody"></tbody>
+        </table>
       </div>
 
       <div class="card span-8">
@@ -146,7 +176,7 @@
     }
 
     function renderMetrics(metrics) {
-      const items = [
+      const latencyItems = [
         ["Ticks Processed", metrics.ticks_processed],
         ["Pipeline Errors", metrics.pipeline_errors],
         ["Avg Total Latency (ms)", num(metrics.avg_total_signal_latency_ms, 1)],
@@ -158,9 +188,45 @@
         ["Latency Budget", metrics.within_latency_budget ? "OK" : "Above 500"],
       ];
       const el = document.getElementById("metricsKpi");
-      el.innerHTML = items.map(([k, v]) =>
+      el.innerHTML = latencyItems.map(([k, v]) =>
         `<div class="kpi-item"><div class="label">${k}</div><div class="value">${v}</div></div>`
       ).join("");
+
+      const perfItems = [
+        ["Win Rate %", num(metrics.win_rate, 2)],
+        ["Total Trades", metrics.total_trades ?? 0],
+        ["Winning Trades", metrics.winning_trades ?? 0],
+        ["Losing Trades", metrics.losing_trades ?? 0],
+        ["Total PnL", num(metrics.total_pnl, 2)],
+        ["Current Day PnL", num(metrics.current_day_pnl, 2)],
+        ["Avg Win", num(metrics.avg_win, 2)],
+        ["Avg Loss", num(metrics.avg_loss, 2)],
+      ];
+      const perfEl = document.getElementById("performanceKpi");
+      perfEl.innerHTML = perfItems.map(([k, v]) =>
+        `<div class="kpi-item"><div class="label">${k}</div><div class="value">${v}</div></div>`
+      ).join("");
+
+      renderLastTrades(metrics.last_5_trades || []);
+    }
+
+    function renderLastTrades(rows) {
+      const body = document.getElementById("lastTradesBody");
+      if (!rows.length) {
+        body.innerHTML = `<tr><td colspan="7" class="small">No closed trades yet</td></tr>`;
+        return;
+      }
+      body.innerHTML = rows.slice().reverse().map(row => `
+        <tr>
+          <td>${row.closed_at || "-"}</td>
+          <td>${row.signal_id || "-"}</td>
+          <td>${row.symbol || "-"}</td>
+          <td><span class="pill ${signalClass(row.signal)}">${row.signal || "-"}</span></td>
+          <td>${num(row.entry_price)}</td>
+          <td>${num(row.exit_price)}</td>
+          <td>${num(row.pnl)}</td>
+        </tr>
+      `).join("");
     }
 
     function renderSignals(cards) {
@@ -211,6 +277,48 @@
       `).join("");
     }
 
+    function pnlClass(v) {
+      const n = Number(v);
+      if (Number.isNaN(n)) return "";
+      return n >= 0 ? "pnl-pos" : "pnl-neg";
+    }
+
+    function statusClass(v) {
+      return String(v || "").toUpperCase() === "ACTIVE" ? "status-active" : "";
+    }
+
+    function renderTradeMonitor(activeRows, historyRows) {
+      const body = document.getElementById("tradeMonitorBody");
+      const merged = [...(activeRows || []), ...(historyRows || [])]
+        .sort((a, b) => new Date(b.entry_time || b.created_at || 0) - new Date(a.entry_time || a.created_at || 0))
+        .slice(0, 40);
+      if (!merged.length) {
+        body.innerHTML = `<tr><td colspan="11" class="small">No trades yet</td></tr>`;
+        return;
+      }
+      body.innerHTML = merged.map(row => {
+        const sig = row.signal || row.engine_signal || "-";
+        const typeText = sig === "BUY_CE" ? "CE" : (sig === "BUY_PE" ? "PE" : "-");
+        const target = row.target_2 ?? row.target_price;
+        const ltp = row.current_ltp ?? row.exit_price;
+        return `
+          <tr>
+            <td>${row.signal_id || "-"}</td>
+            <td>${row.symbol || "-"}</td>
+            <td><span class="pill ${signalClass(sig)}">${typeText}</span></td>
+            <td>${row.strategy || "-"}</td>
+            <td>${num(row.entry_price)}</td>
+            <td>${num(ltp)}</td>
+            <td>${num(row.stop_loss)}</td>
+            <td>${num(target)}</td>
+            <td class="${pnlClass(row.pnl)}">${num(row.pnl)}</td>
+            <td class="${statusClass(row.status)}">${row.status || "-"}</td>
+            <td>${row.entry_time || row.created_at || "-"}</td>
+          </tr>
+        `;
+      }).join("");
+    }
+
     function renderLive(payload) {
       state.live = payload;
       const engines = payload.engine_outputs || [];
@@ -245,14 +353,17 @@
 
     async function refreshRest() {
       try {
-        const [signals, metrics, history] = await Promise.all([
+        const [signals, metrics, history, activeSignals, historySignals] = await Promise.all([
           fetchJson("/signals"),
           fetchJson("/metrics"),
           fetchJson("/history?limit=100"),
+          fetchJson("/signals/active"),
+          fetchJson("/signals/history?limit=200"),
         ]);
         renderSignals(signals.cards || []);
         renderMetrics(metrics || {});
         renderHistory(history.non_active_history || []);
+        renderTradeMonitor(activeSignals.active_signals || [], historySignals.history || []);
       } catch (err) {
         console.error(err);
       }
@@ -282,6 +393,9 @@
           const payload = JSON.parse(event.data);
           renderLive(payload);
           if (payload.cards) renderSignals(payload.cards);
+          if (payload.active_signals || payload.history) {
+            renderTradeMonitor(payload.active_signals || [], payload.history || []);
+          }
         } catch (err) {
           console.error("Bad WS payload", err);
         }

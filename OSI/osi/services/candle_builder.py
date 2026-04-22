@@ -28,6 +28,7 @@ class CandleBuilder:
 
     def __init__(self) -> None:
         self._state: Dict[str, Dict[str, _Bucket]] = {}
+        self._last_closed: Dict[str, Dict[str, Candle]] = {}
 
     def add_tick(self, tick: MarketTick) -> List[Candle]:
         closed: List[Candle] = []
@@ -59,21 +60,21 @@ class CandleBuilder:
             return out
 
         if bucket_id != bucket.bucket_id:
-            out.append(
-                Candle(
-                    symbol=tick.symbol,
-                    timeframe=timeframe,
-                    open=bucket.open,
-                    high=bucket.high,
-                    low=bucket.low,
-                    close=bucket.close,
-                    volume=bucket.volume,
-                    start=bucket.start,
-                    end=bucket.end,
-                    option_chain=bucket.option_chain,
-                    meta={"closed_at": datetime.now(timezone.utc).isoformat()},
-                )
+            closed = Candle(
+                symbol=tick.symbol,
+                timeframe=timeframe,
+                open=bucket.open,
+                high=bucket.high,
+                low=bucket.low,
+                close=bucket.close,
+                volume=bucket.volume,
+                start=bucket.start,
+                end=bucket.end,
+                option_chain=bucket.option_chain,
+                meta={"closed_at": datetime.now(timezone.utc).isoformat()},
             )
+            out.append(closed)
+            self._last_closed.setdefault(tick.symbol, {})[timeframe] = closed
             symbol_state[key] = _Bucket(
                 bucket_id=bucket_id,
                 open=tick.index_price,
@@ -102,4 +103,25 @@ class CandleBuilder:
     @staticmethod
     def _bucket_start(bucket_id: int, minutes: int) -> datetime:
         return datetime.fromtimestamp(bucket_id * minutes * 60, tz=timezone.utc)
+
+    def get_live_candle(self, symbol: str, timeframe: str) -> Dict | None:
+        bucket = (self._state.get(symbol) or {}).get(timeframe)
+        if not bucket:
+            return None
+        return {
+            "open": bucket.open,
+            "high": bucket.high,
+            "low": bucket.low,
+            "close": bucket.close,
+            "volume": bucket.volume,
+            "start": bucket.start,
+            "end": bucket.end,
+            "bucket_id": bucket.bucket_id,
+        }
+
+    def get_last_closed(self, symbol: str, timeframe: str) -> Dict | None:
+        c = (self._last_closed.get(symbol) or {}).get(timeframe)
+        if c is None:
+            return None
+        return c.model_dump(mode="json")
 

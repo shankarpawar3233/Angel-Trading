@@ -1,0 +1,4295 @@
+{
+  "active_signals": [
+    {
+      "signal_id": "OSI-9FFB1A0097",
+      "symbol": "NIFTY",
+      "signal": "BUY_PE",
+      "engine_signal": "BUY_PE",
+      "strategy": "intrabar",
+      "confidence": 87.54,
+      "strength": 0.751,
+      "status": "ACTIVE",
+      "expiry": "20260428",
+      "entry_price": 244.75,
+      "current_ltp": 289.3,
+      "stop_loss": 244.75,
+      "target_1": 274.74,
+      "target_2": 304.73,
+      "target_price": 304.73,
+      "option_symbol": "NIFTY_20260428_24450_PE",
+      "strike": 24450.0,
+      "reason": "",
+      "exit_price": null,
+      "stop_reference_index": 24466.45,
+      "partial_booked": true,
+      "quantity": 1.0,
+      "remaining_qty": 0.5,
+      "realized_pnl": 20.22,
+      "max_favorable": 2.2,
+      "max_adverse": -49.05,
+      "confidence_breakdown": {
+        "base": 77.54,
+        "primary": 10.0,
+        "directional": 9.01,
+        "vwap": 6.0,
+        "regime": 0.0,
+        "momentum": -10.0,
+        "dead_zone": 0.0,
+        "final": 87.54
+      },
+      "entry_time": "2026-04-22T04:07:53.407899Z",
+      "exit_time": null,
+      "created_at": "2026-04-22T04:07:53.407899Z",
+      "closed_at": null,
+      "pnl": null,
+      "lifecycle_events": [
+        {
+          "event": "CREATED",
+          "timestamp": "2026-04-22T04:07:53.407899+00:00",
+          "price": 244.75,
+          "t1": 274.74,
+          "t2": 304.73,
+          "option_momentum_strength": 0.0
+        },
+        {
+          "event": "PARTIAL_BOOK_T1",
+          "timestamp": "2026-04-22T04:30:11.024082+00:00",
+          "price": 285.2,
+          "booked_qty": 0.5
+        },
+        {
+          "event": "SL_MOVED_TO_ENTRY",
+          "timestamp": "2026-04-22T04:30:11.024082+00:00",
+          "price": 285.2
+        }
+      ]
+    },
+    {
+      "signal_id": "OSI-FFA5450923",
+      "symbol": "SENSEX",
+      "signal": "BUY_PE",
+      "engine_signal": "BUY_PE",
+      "strategy": "intrabar",
+      "confidence": 100.0,
+      "strength": 0.9,
+      "status": "ACTIVE",
+      "expiry": "20260423",
+      "entry_price": 418.4,
+      "current_ltp": 413.25,
+      "stop_loss": 397.48,
+      "target_1": 470.7,
+      "target_2": 523.0,
+      "target_price": 523.0,
+      "option_symbol": "SENSEX_20260423_78500_PE",
+      "strike": 78500.0,
+      "reason": "",
+      "exit_price": null,
+      "stop_reference_index": 78529.85,
+      "partial_booked": false,
+      "quantity": 1.0,
+      "remaining_qty": 1.0,
+      "realized_pnl": 0.0,
+      "max_favorable": 20.25,
+      "max_adverse": -10.45,
+      "confidence_breakdown": {
+        "base": 90.0,
+        "primary": 10.0,
+        "directional": 10.8,
+        "vwap": 6.0,
+        "regime": 4.0,
+        "momentum": -10.0,
+        "dead_zone": 0.0,
+        "final": 100.0
+      },
+      "entry_time": "2026-04-22T04:43:31.798627Z",
+      "exit_time": null,
+      "created_at": "2026-04-22T04:43:31.798627Z",
+      "closed_at": null,
+      "pnl": null,
+      "lifecycle_events": [
+        {
+          "event": "CREATED",
+          "timestamp": "2026-04-22T04:43:31.798627+00:00",
+          "price": 418.4,
+          "t1": 470.7,
+          "t2": 523.0,
+          "option_momentum_strength": 0.0
+        }
+      ]
+    }
+  ],
+  "history": [
+    {
+      "signal_id": "OSI-20E753DF88",
+      "symbol": "SENSEX",
+      "signal": "BUY_PE",
+      "engine_signal": "BUY_PE",
+      "strategy": "intrabar",
+      "confidence": 90.0,
+      "strength": 0.9,
+      "status": "SL_HIT",
+      "expiry": "20260423",
+      "entry_price": 371.35,
+      "current_ltp": 350.95,
+      "stop_loss": 352.78,
+      "target_1": 417.77,
+      "target_2": 464.19,
+      "target_price": 464.19,
+      "option_symbol": "SENSEX_20260423_78800_PE",
+      "strike": 78800.0,
+      "reason": "",
+      "exit_price": 350.95,
+      "stop_reference_index": 78895.73,
+      "partial_booked": false,
+      "quantity": 1.0,
+      "remaining_qty": 0.0,
+      "realized_pnl": 0.0,
+      "max_favorable": 20.4,
+      "max_adverse": -3.8,
+      "confidence_breakdown": {
+        "base": 90.0,
+        "primary": 10.0,
+        "directional": 10.8,
+        "vwap": 6.0,
+        "regime": 0.0,
+        "momentum": -10.0,
+        "dead_zone": -10.0,
+        "final": 90.0
+      },
+      "entry_time": "2026-04-22T03:51:05.117779Z",
+      "exit_time": "2026-04-22T03:51:44.044552Z",
+      "created_at": "2026-04-22T03:51:05.117779Z",
+      "closed_at": "2026-04-22T03:51:44.044552Z",
+      "pnl": 20.4,
+      "lifecycle_events": [
+        {
+          "event": "CREATED",
+          "timestamp": "2026-04-22T03:51:05.117779+00:00",
+          "price": 371.35,
+          "t1": 417.77,
+          "t2": 464.19,
+          "option_momentum_strength": 0.0
+        },
+        {
+          "event": "SL_HIT",
+          "timestamp": "2026-04-22T03:51:44.043551+00:00",
+          "price": 350.95
+        },
+        {
+          "event": "SL_HIT",
+          "timestamp": "2026-04-22T03:51:44.044552+00:00",
+          "reason": "STOP_LOSS"
+        }
+      ]
+    },
+    {
+      "signal_id": "OSI-185DAD96E2",
+      "symbol": "SENSEX",
+      "signal": "BUY_PE",
+      "engine_signal": "BUY_PE",
+      "strategy": "intrabar",
+      "confidence": 100.0,
+      "strength": 0.9,
+      "status": "SL_HIT",
+      "expiry": "20260423",
+      "entry_price": 390.9,
+      "current_ltp": 369.75,
+      "stop_loss": 371.35,
+      "target_1": 439.76,
+      "target_2": 488.62,
+      "target_price": 488.62,
+      "option_symbol": "SENSEX_20260423_78700_PE",
+      "strike": 78700.0,
+      "reason": "",
+      "exit_price": 369.75,
+      "stop_reference_index": 78771.5,
+      "partial_booked": false,
+      "quantity": 1.0,
+      "remaining_qty": 0.0,
+      "realized_pnl": 0.0,
+      "max_favorable": 21.15,
+      "max_adverse": -23.8,
+      "confidence_breakdown": {
+        "base": 90.0,
+        "primary": 10.0,
+        "directional": 10.8,
+        "vwap": 6.0,
+        "regime": 4.0,
+        "momentum": -10.0,
+        "dead_zone": 0.0,
+        "final": 100.0
+      },
+      "entry_time": "2026-04-22T03:59:36.308625Z",
+      "exit_time": "2026-04-22T04:03:06.266100Z",
+      "created_at": "2026-04-22T03:59:36.308625Z",
+      "closed_at": "2026-04-22T04:03:06.266100Z",
+      "pnl": 21.15,
+      "lifecycle_events": [
+        {
+          "event": "CREATED",
+          "timestamp": "2026-04-22T03:59:36.308625+00:00",
+          "price": 390.9,
+          "t1": 439.76,
+          "t2": 488.62,
+          "option_momentum_strength": 0.0
+        },
+        {
+          "event": "SL_HIT",
+          "timestamp": "2026-04-22T04:03:06.266100+00:00",
+          "price": 369.75
+        },
+        {
+          "event": "SL_HIT",
+          "timestamp": "2026-04-22T04:03:06.266100+00:00",
+          "reason": "STOP_LOSS"
+        }
+      ]
+    },
+    {
+      "signal_id": "OSI-3668DE13EF",
+      "symbol": "NIFTY",
+      "signal": "BUY_PE",
+      "engine_signal": "BUY_PE",
+      "strategy": "intrabar",
+      "confidence": 78.42,
+      "strength": 0.781,
+      "status": "CLOSED",
+      "expiry": "20260428",
+      "entry_price": 275.6,
+      "current_ltp": 281.4,
+      "stop_loss": 261.82,
+      "target_1": 306.86,
+      "target_2": 338.12,
+      "target_price": 338.12,
+      "option_symbol": "NIFTY_20260428_24550_PE",
+      "strike": 24550.0,
+      "reason": "",
+      "exit_price": 275.6,
+      "stop_reference_index": 24485.0,
+      "partial_booked": false,
+      "quantity": 1.0,
+      "remaining_qty": 0.0,
+      "realized_pnl": 0.0,
+      "max_favorable": 11.5,
+      "max_adverse": -5.8,
+      "confidence_breakdown": {
+        "base": 78.42,
+        "primary": 10.0,
+        "directional": 9.37,
+        "vwap": 6.0,
+        "regime": 0.0,
+        "momentum": -10.0,
+        "dead_zone": -10.0,
+        "final": 78.42
+      },
+      "entry_time": "2026-04-22T03:51:13.340697Z",
+      "exit_time": "2026-04-22T04:03:31.093317Z",
+      "created_at": "2026-04-22T03:51:13.340697Z",
+      "closed_at": "2026-04-22T04:03:31.093317Z",
+      "pnl": 0.0,
+      "lifecycle_events": [
+        {
+          "event": "CREATED",
+          "timestamp": "2026-04-22T03:51:13.340697+00:00",
+          "price": 275.6,
+          "t1": 306.86,
+          "t2": 338.12,
+          "option_momentum_strength": 0.0
+        },
+        {
+          "event": "CLOSED",
+          "timestamp": "2026-04-22T04:03:31.093317+00:00",
+          "reason": "OPPOSITE_SIGNAL_REPLACED"
+        }
+      ]
+    },
+    {
+      "signal_id": "OSI-C6419DB8D4",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "engine_signal": "BUY_CE",
+      "strategy": "intrabar",
+      "confidence": 94.3,
+      "strength": 0.843,
+      "status": "SL_HIT",
+      "expiry": "20260423",
+      "entry_price": 404.55,
+      "current_ltp": 382.75,
+      "stop_loss": 384.32,
+      "target_1": 455.12,
+      "target_2": 505.69,
+      "target_price": 505.69,
+      "option_symbol": "SENSEX_20260423_78700_CE",
+      "strike": 78700.0,
+      "reason": "",
+      "exit_price": 382.75,
+      "stop_reference_index": 78688.98,
+      "partial_booked": false,
+      "quantity": 1.0,
+      "remaining_qty": 0.0,
+      "realized_pnl": 0.0,
+      "max_favorable": 2.2,
+      "max_adverse": -21.8,
+      "confidence_breakdown": {
+        "base": 84.3,
+        "primary": 10.0,
+        "directional": 10.12,
+        "vwap": 6.0,
+        "regime": 0.0,
+        "momentum": -10.0,
+        "dead_zone": 0.0,
+        "final": 94.3
+      },
+      "entry_time": "2026-04-22T04:12:41.224811Z",
+      "exit_time": "2026-04-22T04:13:07.143493Z",
+      "created_at": "2026-04-22T04:12:41.224811Z",
+      "closed_at": "2026-04-22T04:13:07.143493Z",
+      "pnl": -21.8,
+      "lifecycle_events": [
+        {
+          "event": "CREATED",
+          "timestamp": "2026-04-22T04:12:41.224811+00:00",
+          "price": 404.55,
+          "t1": 455.12,
+          "t2": 505.69,
+          "option_momentum_strength": 0.0
+        },
+        {
+          "event": "SL_HIT",
+          "timestamp": "2026-04-22T04:13:07.143493+00:00",
+          "price": 382.75
+        },
+        {
+          "event": "SL_HIT",
+          "timestamp": "2026-04-22T04:13:07.143493+00:00",
+          "reason": "STOP_LOSS"
+        }
+      ]
+    },
+    {
+      "signal_id": "OSI-9662E12257",
+      "symbol": "SENSEX",
+      "signal": "BUY_PE",
+      "engine_signal": "BUY_PE",
+      "strategy": "intrabar",
+      "confidence": 100.0,
+      "strength": 0.9,
+      "status": "SL_HIT",
+      "expiry": "20260423",
+      "entry_price": 431.5,
+      "current_ltp": 409.6,
+      "stop_loss": 409.92,
+      "target_1": 485.44,
+      "target_2": 539.38,
+      "target_price": 539.38,
+      "option_symbol": "SENSEX_20260423_78700_PE",
+      "strike": 78700.0,
+      "reason": "",
+      "exit_price": 409.6,
+      "stop_reference_index": 78685.08,
+      "partial_booked": false,
+      "quantity": 1.0,
+      "remaining_qty": 0.0,
+      "realized_pnl": 0.0,
+      "max_favorable": 21.9,
+      "max_adverse": -28.5,
+      "confidence_breakdown": {
+        "base": 90.0,
+        "primary": 10.0,
+        "directional": 10.8,
+        "vwap": 6.0,
+        "regime": 0.0,
+        "momentum": -10.0,
+        "dead_zone": 0.0,
+        "final": 100.0
+      },
+      "entry_time": "2026-04-22T04:15:24.528680Z",
+      "exit_time": "2026-04-22T04:22:05.420164Z",
+      "created_at": "2026-04-22T04:15:24.528680Z",
+      "closed_at": "2026-04-22T04:22:05.420164Z",
+      "pnl": 21.9,
+      "lifecycle_events": [
+        {
+          "event": "CREATED",
+          "timestamp": "2026-04-22T04:15:24.528680+00:00",
+          "price": 431.5,
+          "t1": 485.44,
+          "t2": 539.38,
+          "option_momentum_strength": 0.0
+        },
+        {
+          "event": "SL_HIT",
+          "timestamp": "2026-04-22T04:22:05.420164+00:00",
+          "price": 409.6
+        },
+        {
+          "event": "SL_HIT",
+          "timestamp": "2026-04-22T04:22:05.420164+00:00",
+          "reason": "STOP_LOSS"
+        }
+      ]
+    },
+    {
+      "signal_id": "OSI-A1FAB4020F",
+      "symbol": "SENSEX",
+      "signal": "BUY_PE",
+      "engine_signal": "BUY_PE",
+      "strategy": "intrabar",
+      "confidence": 100.0,
+      "strength": 0.9,
+      "status": "SL_HIT",
+      "expiry": "20260423",
+      "entry_price": 395.5,
+      "current_ltp": 395.2,
+      "stop_loss": 395.5,
+      "target_1": 444.94,
+      "target_2": 494.38,
+      "target_price": 494.38,
+      "option_symbol": "SENSEX_20260423_78500_PE",
+      "strike": 78500.0,
+      "reason": "",
+      "exit_price": 395.2,
+      "stop_reference_index": 78564.82,
+      "partial_booked": true,
+      "quantity": 1.0,
+      "remaining_qty": 0.0,
+      "realized_pnl": 25.0,
+      "max_favorable": 0.4,
+      "max_adverse": -73.35,
+      "confidence_breakdown": {
+        "base": 90.0,
+        "primary": 10.0,
+        "directional": 10.8,
+        "vwap": 6.0,
+        "regime": 4.0,
+        "momentum": -10.0,
+        "dead_zone": 0.0,
+        "final": 100.0
+      },
+      "entry_time": "2026-04-22T04:29:45.727752Z",
+      "exit_time": "2026-04-22T04:40:07.579933Z",
+      "created_at": "2026-04-22T04:29:45.727752Z",
+      "closed_at": "2026-04-22T04:40:07.579933Z",
+      "pnl": 25.15,
+      "lifecycle_events": [
+        {
+          "event": "CREATED",
+          "timestamp": "2026-04-22T04:29:45.727752+00:00",
+          "price": 395.5,
+          "t1": 444.94,
+          "t2": 494.38,
+          "option_momentum_strength": 0.0
+        },
+        {
+          "event": "PARTIAL_BOOK_T1",
+          "timestamp": "2026-04-22T04:30:32.412940+00:00",
+          "price": 445.5,
+          "booked_qty": 0.5
+        },
+        {
+          "event": "SL_MOVED_TO_ENTRY",
+          "timestamp": "2026-04-22T04:30:32.412940+00:00",
+          "price": 445.5
+        },
+        {
+          "event": "SL_HIT",
+          "timestamp": "2026-04-22T04:40:07.579933+00:00",
+          "price": 395.2
+        },
+        {
+          "event": "SL_HIT",
+          "timestamp": "2026-04-22T04:40:07.579933+00:00",
+          "reason": "STOP_LOSS"
+        }
+      ]
+    }
+  ],
+  "rejected_signals": [
+    {
+      "timestamp": "2026-04-22T03:51:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T03:51:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T03:51:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T03:51:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T03:52:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T03:52:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T03:52:06+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 90.0,
+      "reason": "cooldown",
+      "notes": [
+        "primary_trigger=intrabar_engine",
+        "directional_strength=0.900",
+        "vwap_aligned"
+      ],
+      "confidence_breakdown": {
+        "base": 90.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 90.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T03:53:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T03:53:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T03:54:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T03:54:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T03:54:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T03:54:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T03:54:02+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_PE",
+      "confidence": 90.0,
+      "reason": "option_contract_unavailable",
+      "notes": [
+        "primary_trigger=intrabar_engine",
+        "directional_strength=0.900",
+        "vwap_aligned"
+      ],
+      "confidence_breakdown": {
+        "base": 90.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 90.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T03:54:10+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_PE",
+      "confidence": 84.2,
+      "reason": "duplicate_active",
+      "notes": [
+        "primary_trigger=intrabar_engine",
+        "directional_strength=0.842",
+        "vwap_aligned"
+      ],
+      "confidence_breakdown": {
+        "base": 84.2,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 84.2
+      }
+    },
+    {
+      "timestamp": "2026-04-22T03:55:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T03:55:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T03:55:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T03:55:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T03:55:11+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_PE",
+      "confidence": 90.0,
+      "reason": "option_contract_unavailable",
+      "notes": [
+        "primary_trigger=intrabar_engine",
+        "directional_strength=0.900",
+        "vwap_aligned"
+      ],
+      "confidence_breakdown": {
+        "base": 90.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 90.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T03:55:14+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_PE",
+      "confidence": 81.2,
+      "reason": "duplicate_active",
+      "notes": [
+        "primary_trigger=intrabar_engine",
+        "directional_strength=0.812",
+        "vwap_aligned"
+      ],
+      "confidence_breakdown": {
+        "base": 81.2,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 81.2
+      }
+    },
+    {
+      "timestamp": "2026-04-22T03:56:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T03:56:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T03:56:34+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_PE",
+      "confidence": 90.0,
+      "reason": "option_contract_unavailable",
+      "notes": [
+        "primary_trigger=intrabar_engine",
+        "directional_strength=0.900",
+        "vwap_aligned"
+      ],
+      "confidence_breakdown": {
+        "base": 90.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 90.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T03:57:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_PE",
+      "confidence": 9.74,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 9.74,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 9.74
+      }
+    },
+    {
+      "timestamp": "2026-04-22T03:57:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_PE",
+      "confidence": 9.74,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 9.74,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 9.74
+      }
+    },
+    {
+      "timestamp": "2026-04-22T03:57:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_PE",
+      "confidence": 9.74,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 9.74,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 9.74
+      }
+    },
+    {
+      "timestamp": "2026-04-22T03:57:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_PE",
+      "confidence": 9.74,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 9.74,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 9.74
+      }
+    },
+    {
+      "timestamp": "2026-04-22T03:57:35+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_PE",
+      "confidence": 76.57,
+      "reason": "option_contract_unavailable",
+      "notes": [
+        "primary_trigger=intrabar_engine",
+        "directional_strength=0.719",
+        "vwap_aligned"
+      ],
+      "confidence_breakdown": {
+        "base": 76.57,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 76.57
+      }
+    },
+    {
+      "timestamp": "2026-04-22T03:58:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_PE",
+      "confidence": 10.42,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 10.42,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 10.42
+      }
+    },
+    {
+      "timestamp": "2026-04-22T03:58:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_PE",
+      "confidence": 10.42,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 10.42,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 10.42
+      }
+    },
+    {
+      "timestamp": "2026-04-22T03:58:17+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_PE",
+      "confidence": 77.17,
+      "reason": "duplicate_active",
+      "notes": [
+        "primary_trigger=intrabar_engine",
+        "directional_strength=0.739",
+        "vwap_aligned",
+        "regime_trending_breakout_boost"
+      ],
+      "confidence_breakdown": {
+        "base": 77.17,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 77.17
+      }
+    },
+    {
+      "timestamp": "2026-04-22T03:58:36+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_PE",
+      "confidence": 76.94,
+      "reason": "option_contract_unavailable",
+      "notes": [
+        "primary_trigger=intrabar_engine",
+        "directional_strength=0.731",
+        "vwap_aligned",
+        "regime_trending_breakout_boost"
+      ],
+      "confidence_breakdown": {
+        "base": 76.94,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 76.94
+      }
+    },
+    {
+      "timestamp": "2026-04-22T03:59:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_PE",
+      "confidence": 10.42,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 10.42,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 10.42
+      }
+    },
+    {
+      "timestamp": "2026-04-22T03:59:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_PE",
+      "confidence": 10.42,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 10.42,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 10.42
+      }
+    },
+    {
+      "timestamp": "2026-04-22T03:59:33+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_PE",
+      "confidence": 90.0,
+      "reason": "duplicate_active",
+      "notes": [
+        "primary_trigger=intrabar_engine",
+        "directional_strength=0.900",
+        "vwap_aligned",
+        "regime_trending_breakout_boost"
+      ],
+      "confidence_breakdown": {
+        "base": 90.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 90.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:00:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_PE",
+      "confidence": 10.42,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 10.42,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 10.42
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:00:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_PE",
+      "confidence": 10.42,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 10.42,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 10.42
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:00:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_PE",
+      "confidence": 10.42,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 10.42,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 10.42
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:00:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_PE",
+      "confidence": 10.42,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 10.42,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 10.42
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:00:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_PE",
+      "confidence": 10.42,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 10.42,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 10.42
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:00:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_PE",
+      "confidence": 10.42,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 10.42,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 10.42
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:00:33+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_PE",
+      "confidence": 86.3,
+      "reason": "duplicate_active",
+      "notes": [
+        "primary_trigger=intrabar_engine",
+        "directional_strength=0.863",
+        "vwap_aligned",
+        "regime_trending_breakout_boost"
+      ],
+      "confidence_breakdown": {
+        "base": 86.3,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 86.3
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:00:36+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_PE",
+      "confidence": 90.0,
+      "reason": "duplicate_active",
+      "notes": [
+        "primary_trigger=intrabar_engine",
+        "directional_strength=0.900",
+        "vwap_aligned",
+        "regime_trending_breakout_boost"
+      ],
+      "confidence_breakdown": {
+        "base": 90.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 90.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:01:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_PE",
+      "confidence": 10.42,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 10.42,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 10.42
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:01:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_PE",
+      "confidence": 10.42,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 10.42,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 10.42
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:02:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 10.42,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 10.42,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 10.42
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:02:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 10.42,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 10.42,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 10.42
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:03:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 10.42,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 10.42,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 10.42
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:03:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 10.42,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 10.42,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 10.42
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:03:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 10.42,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 10.42,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 10.42
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:03:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 10.42,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 10.42,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 10.42
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:03:31+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 90.0,
+      "reason": "option_contract_unavailable",
+      "notes": [
+        "primary_trigger=intrabar_engine",
+        "directional_strength=0.900",
+        "vwap_aligned",
+        "regime_trending_breakout_boost"
+      ],
+      "confidence_breakdown": {
+        "base": 90.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 90.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:07:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:07:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:08:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:08:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:08:08+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_PE",
+      "confidence": 90.0,
+      "reason": "option_contract_unavailable",
+      "notes": [
+        "primary_trigger=intrabar_engine",
+        "directional_strength=0.900",
+        "vwap_aligned"
+      ],
+      "confidence_breakdown": {
+        "base": 90.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 90.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:09:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:09:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:09:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:09:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:09:23+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_PE",
+      "confidence": 90.0,
+      "reason": "option_contract_unavailable",
+      "notes": [
+        "primary_trigger=intrabar_engine",
+        "directional_strength=0.900",
+        "vwap_aligned"
+      ],
+      "confidence_breakdown": {
+        "base": 90.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 90.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:09:34+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_PE",
+      "confidence": 77.45,
+      "reason": "duplicate_active",
+      "notes": [
+        "primary_trigger=intrabar_engine",
+        "directional_strength=0.748",
+        "vwap_aligned"
+      ],
+      "confidence_breakdown": {
+        "base": 77.45,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 77.45
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:11:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:11:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:11:10+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 90.0,
+      "reason": "stale_option_data",
+      "notes": [
+        "primary_trigger=intrabar_engine",
+        "directional_strength=0.900",
+        "vwap_aligned"
+      ],
+      "confidence_breakdown": {
+        "base": 90.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 90.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:12:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:12:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:12:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:12:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:13:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:13:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:13:07+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_PE",
+      "confidence": 87.3,
+      "reason": "duplicate_active",
+      "notes": [
+        "primary_trigger=intrabar_engine",
+        "directional_strength=0.873",
+        "vwap_aligned"
+      ],
+      "confidence_breakdown": {
+        "base": 87.3,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 87.3
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:13:42+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_PE",
+      "confidence": 90.0,
+      "reason": "cooldown",
+      "notes": [
+        "primary_trigger=intrabar_engine",
+        "directional_strength=0.900",
+        "vwap_aligned"
+      ],
+      "confidence_breakdown": {
+        "base": 90.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 90.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:14:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:14:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:15:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:15:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:15:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:15:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:15:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:15:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:15:27+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_PE",
+      "confidence": 77.57,
+      "reason": "duplicate_active",
+      "notes": [
+        "primary_trigger=intrabar_engine",
+        "directional_strength=0.752",
+        "vwap_aligned"
+      ],
+      "confidence_breakdown": {
+        "base": 77.57,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 77.57
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:16:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:16:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:16:46+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_PE",
+      "confidence": 79.3,
+      "reason": "duplicate_active",
+      "notes": [
+        "primary_trigger=intrabar_engine",
+        "directional_strength=0.793",
+        "vwap_aligned"
+      ],
+      "confidence_breakdown": {
+        "base": 79.3,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 79.3
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:16:47+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_PE",
+      "confidence": 77.99,
+      "reason": "duplicate_active",
+      "notes": [
+        "primary_trigger=intrabar_engine",
+        "directional_strength=0.766",
+        "vwap_aligned"
+      ],
+      "confidence_breakdown": {
+        "base": 77.99,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 77.99
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:17:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_PE",
+      "confidence": 9.74,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 9.74,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 9.74
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:17:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_PE",
+      "confidence": 9.74,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 9.74,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 9.74
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:17:53+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_PE",
+      "confidence": 90.0,
+      "reason": "duplicate_active",
+      "notes": [
+        "primary_trigger=intrabar_engine",
+        "directional_strength=0.900",
+        "vwap_aligned"
+      ],
+      "confidence_breakdown": {
+        "base": 90.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 90.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:18:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 9.74,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 9.74,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 9.74
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:18:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 10.42,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 10.42,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 10.42
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:18:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 9.74,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 9.74,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 9.74
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:18:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 10.42,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 10.42,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 10.42
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:18:17+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_PE",
+      "confidence": 77.53,
+      "reason": "duplicate_active",
+      "notes": [
+        "primary_trigger=intrabar_engine",
+        "directional_strength=0.751",
+        "vwap_aligned",
+        "regime_trending_breakout_boost"
+      ],
+      "confidence_breakdown": {
+        "base": 77.53,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 77.53
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:18:55+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_PE",
+      "confidence": 82.5,
+      "reason": "duplicate_active",
+      "notes": [
+        "primary_trigger=intrabar_engine",
+        "directional_strength=0.825",
+        "vwap_aligned",
+        "regime_trending_breakout_boost"
+      ],
+      "confidence_breakdown": {
+        "base": 82.5,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 82.5
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:19:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 10.42,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 10.42,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 10.42
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:19:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_PE",
+      "confidence": 79.74,
+      "reason": "duplicate_active",
+      "notes": [
+        "primary_trigger=intrabar_engine",
+        "directional_strength=0.825",
+        "vwap_aligned",
+        "regime_trending_breakout_boost"
+      ],
+      "confidence_breakdown": {
+        "base": 79.74,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 79.74
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:20:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 10.42,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 10.42,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 10.42
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:20:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 10.42,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 10.42,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 10.42
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:20:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 10.42,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 10.42,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 10.42
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:20:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 10.42,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 10.42,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 10.42
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:21:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 10.42,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 10.42,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 10.42
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:21:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 10.42,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 10.42,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 10.42
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:21:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 10.42,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 10.42,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 10.42
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:21:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 10.42,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 10.42,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 10.42
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:21:09+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_PE",
+      "confidence": 87.8,
+      "reason": "duplicate_active",
+      "notes": [
+        "primary_trigger=intrabar_engine",
+        "directional_strength=0.878",
+        "vwap_aligned",
+        "regime_trending_breakout_boost"
+      ],
+      "confidence_breakdown": {
+        "base": 87.8,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 87.8
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:21:10+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_PE",
+      "confidence": 84.0,
+      "reason": "duplicate_active",
+      "notes": [
+        "primary_trigger=intrabar_engine",
+        "directional_strength=0.840",
+        "vwap_aligned",
+        "regime_trending_breakout_boost"
+      ],
+      "confidence_breakdown": {
+        "base": 84.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 84.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:22:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 10.42,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 10.42,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 10.42
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:22:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 10.42,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 10.42,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 10.42
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:22:10+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 90.0,
+      "reason": "option_contract_unavailable",
+      "notes": [
+        "primary_trigger=intrabar_engine",
+        "directional_strength=0.900",
+        "vwap_aligned",
+        "regime_trending_breakout_boost"
+      ],
+      "confidence_breakdown": {
+        "base": 90.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 90.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:22:11+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 90.0,
+      "reason": "opposite_ignored",
+      "notes": [
+        "primary_trigger=intrabar_engine",
+        "directional_strength=0.900",
+        "vwap_aligned",
+        "regime_trending_breakout_boost"
+      ],
+      "confidence_breakdown": {
+        "base": 90.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 90.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:23:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 9.74,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 9.74,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 9.74
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:23:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 9.74,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 9.74,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 9.74
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:23:12+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_PE",
+      "confidence": 90.0,
+      "reason": "option_contract_unavailable",
+      "notes": [
+        "primary_trigger=intrabar_engine",
+        "directional_strength=0.900",
+        "vwap_aligned"
+      ],
+      "confidence_breakdown": {
+        "base": 90.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 90.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:24:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 9.74,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 9.74,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 9.74
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:24:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 10.42,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 10.42,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 10.42
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:25:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 10.42,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 10.42,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 10.42
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:24:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 9.74,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 9.74,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 9.74
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:24:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 10.42,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 10.42,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 10.42
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:25:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 10.42,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 10.42,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 10.42
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:30:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 1.46,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 1.46,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 1.46
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:30:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 0.87,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.87,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.87
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:30:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_PE",
+      "confidence": 7.81,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 7.81,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 7.81
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:30:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 1.46,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 1.46,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 1.46
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:30:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 0.91,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.91,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.91
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:30:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_PE",
+      "confidence": 7.81,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 7.81,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 7.81
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:30:02+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_PE",
+      "confidence": 90.0,
+      "reason": "duplicate_active",
+      "notes": [
+        "primary_trigger=intrabar_engine",
+        "directional_strength=0.900",
+        "vwap_aligned",
+        "regime_trending_breakout_boost"
+      ],
+      "confidence_breakdown": {
+        "base": 90.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 90.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:30:46+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_PE",
+      "confidence": 90.0,
+      "reason": "duplicate_active",
+      "notes": [
+        "primary_trigger=intrabar_engine",
+        "directional_strength=0.900",
+        "vwap_aligned",
+        "regime_trending_breakout_boost"
+      ],
+      "confidence_breakdown": {
+        "base": 90.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 90.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:31:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_PE",
+      "confidence": 7.81,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 7.81,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 7.81
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:31:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_PE",
+      "confidence": 7.81,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 7.81,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 7.81
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:32:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_PE",
+      "confidence": 7.81,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 7.81,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 7.81
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:32:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_PE",
+      "confidence": 7.81,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 7.81,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 7.81
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:33:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_PE",
+      "confidence": 7.81,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 7.81,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 7.81
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:33:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_PE",
+      "confidence": 7.81,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 7.81,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 7.81
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:33:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_PE",
+      "confidence": 7.81,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 7.81,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 7.81
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:33:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_PE",
+      "confidence": 7.81,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 7.81,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 7.81
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:34:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_PE",
+      "confidence": 14.84,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 14.84,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 14.84
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:34:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_PE",
+      "confidence": 14.79,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 14.79,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 14.79
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:35:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_PE",
+      "confidence": 14.39,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 14.39,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 14.39
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:35:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 5.18,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 5.18,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 5.18
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:35:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_PE",
+      "confidence": 14.43,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 14.43,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 14.43
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:35:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 1.56,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 1.56,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 1.56
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:35:16+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_PE",
+      "confidence": 90.0,
+      "reason": "duplicate_active",
+      "notes": [
+        "primary_trigger=intrabar_engine",
+        "directional_strength=0.900",
+        "vwap_aligned",
+        "regime_trending_breakout_boost"
+      ],
+      "confidence_breakdown": {
+        "base": 90.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 90.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:35:34+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_PE",
+      "confidence": 90.0,
+      "reason": "duplicate_active",
+      "notes": [
+        "primary_trigger=intrabar_engine",
+        "directional_strength=0.900",
+        "vwap_aligned"
+      ],
+      "confidence_breakdown": {
+        "base": 90.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 90.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:36:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 6.66,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 6.66,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 6.66
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:36:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 7.18,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 7.18,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 7.18
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:36:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 6.45,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 6.45,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 6.45
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:36:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 6.97,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 6.97,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 6.97
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:37:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 6.76,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 6.76,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 6.76
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:37:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 6.45,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 6.45,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 6.45
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:38:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 3.33,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 3.33,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 3.33
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:38:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 3.28,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 3.28,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 3.28
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:39:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:39:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:40:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:42:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:39:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:39:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:39:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:39:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:39:09+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_PE",
+      "confidence": 90.0,
+      "reason": "duplicate_active",
+      "notes": [
+        "primary_trigger=intrabar_engine",
+        "directional_strength=0.900",
+        "vwap_aligned"
+      ],
+      "confidence_breakdown": {
+        "base": 90.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 90.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:39:57+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 82.7,
+      "reason": "opposite_ignored",
+      "notes": [
+        "primary_trigger=intrabar_engine",
+        "directional_strength=0.827",
+        "vwap_aligned"
+      ],
+      "confidence_breakdown": {
+        "base": 82.7,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 82.7
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:40:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 79.82,
+      "reason": "opposite_ignored",
+      "notes": [
+        "primary_trigger=intrabar_engine",
+        "directional_strength=0.827",
+        "vwap_aligned"
+      ],
+      "confidence_breakdown": {
+        "base": 79.82,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 79.82
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:40:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 79.82,
+      "reason": "opposite_ignored",
+      "notes": [
+        "primary_trigger=intrabar_engine",
+        "directional_strength=0.827",
+        "vwap_aligned"
+      ],
+      "confidence_breakdown": {
+        "base": 79.82,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 79.82
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:40:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:40:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:40:09+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 90.0,
+      "reason": "stale_option_data",
+      "notes": [
+        "primary_trigger=intrabar_engine",
+        "directional_strength=0.900",
+        "vwap_aligned"
+      ],
+      "confidence_breakdown": {
+        "base": 90.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 90.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:41:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:41:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:42:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 9.74,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 9.74,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 9.74
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:42:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 9.74,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 9.74,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 9.74
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:42:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:42:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:42:19+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_PE",
+      "confidence": 90.0,
+      "reason": "option_contract_unavailable",
+      "notes": [
+        "primary_trigger=intrabar_engine",
+        "directional_strength=0.900",
+        "vwap_aligned"
+      ],
+      "confidence_breakdown": {
+        "base": 90.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 90.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:42:53+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_PE",
+      "confidence": 90.0,
+      "reason": "duplicate_active",
+      "notes": [
+        "primary_trigger=intrabar_engine",
+        "directional_strength=0.900",
+        "vwap_aligned"
+      ],
+      "confidence_breakdown": {
+        "base": 90.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 90.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:43:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:43:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 10.42,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 10.42,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 10.42
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:44:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 0.0,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 0.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 0.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:44:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 10.42,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 10.42,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 10.42
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:44:32+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_PE",
+      "confidence": 83.3,
+      "reason": "duplicate_active",
+      "notes": [
+        "primary_trigger=intrabar_engine",
+        "directional_strength=0.833",
+        "vwap_aligned",
+        "regime_trending_breakout_boost"
+      ],
+      "confidence_breakdown": {
+        "base": 83.3,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 83.3
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:45:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 9.74,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 9.74,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 9.74
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:45:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 9.74,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 9.74,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 9.74
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:45:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 10.42,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 10.42,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 10.42
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:45:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 9.74,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 9.74,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 9.74
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:45:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 9.74,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 9.74,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 9.74
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:45:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 10.42,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 10.42,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 10.42
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:46:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 10.42,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 10.42,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 10.42
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:46:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 10.42,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 10.42,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 10.42
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:46:05+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 90.0,
+      "reason": "opposite_ignored",
+      "notes": [
+        "primary_trigger=intrabar_engine",
+        "directional_strength=0.900",
+        "vwap_aligned",
+        "regime_trending_breakout_boost"
+      ],
+      "confidence_breakdown": {
+        "base": 90.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 90.0
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:46:28+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 87.3,
+      "reason": "opposite_ignored",
+      "notes": [
+        "primary_trigger=intrabar_engine",
+        "directional_strength=0.873",
+        "vwap_aligned",
+        "regime_trending_breakout_boost"
+      ],
+      "confidence_breakdown": {
+        "base": 87.3,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 87.3
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:47:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 10.42,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 10.42,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 10.42
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:47:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 10.42,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 10.42,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 10.42
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:48:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 10.42,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 10.42,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 10.42
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:48:00+00:00",
+      "symbol": "NIFTY",
+      "signal": "BUY_CE",
+      "confidence": 9.74,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 9.74,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 9.74
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:48:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 10.42,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 10.42,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 10.42
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:48:00+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 10.42,
+      "reason": "low_base_confidence",
+      "notes": [],
+      "confidence_breakdown": {
+        "base": 10.42,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 10.42
+      }
+    },
+    {
+      "timestamp": "2026-04-22T04:48:09+00:00",
+      "symbol": "SENSEX",
+      "signal": "BUY_CE",
+      "confidence": 90.0,
+      "reason": "opposite_ignored",
+      "notes": [
+        "primary_trigger=intrabar_engine",
+        "directional_strength=0.900",
+        "vwap_aligned",
+        "regime_trending_breakout_boost"
+      ],
+      "confidence_breakdown": {
+        "base": 90.0,
+        "primary": 0.0,
+        "directional": 0.0,
+        "vwap": 0.0,
+        "regime": 0.0,
+        "momentum": 0.0,
+        "dead_zone": 0.0,
+        "final": 90.0
+      }
+    }
+  ]
+}

@@ -43,6 +43,9 @@ class MetricsService:
     def record_engine_latency(self, engine: str, elapsed_ms: float) -> None:
         self.metrics.engine_exec_ms[engine] = round(elapsed_ms, 3)
 
+    def record_option_data_latency(self, latency_ms: float) -> None:
+        self.metrics.option_data_latency_ms = round(max(0.0, latency_ms), 3)
+
     def record_confidence(self, confidence: float) -> None:
         if confidence >= 80:
             key = "80_100"
@@ -54,6 +57,37 @@ class MetricsService:
 
     def record_error(self) -> None:
         self.metrics.pipeline_errors += 1
+
+    def record_trade_close(self, trade: Dict) -> None:
+        m = self.metrics
+        pnl = float(trade.get("pnl") or 0.0)
+        m.total_trades += 1
+        m.total_pnl = round(m.total_pnl + pnl, 2)
+        m.current_day_pnl = round(m.current_day_pnl + pnl, 2)
+        if pnl > 0:
+            m.winning_trades += 1
+        else:
+            m.losing_trades += 1
+        m.win_rate = round((m.winning_trades / max(1, m.total_trades)) * 100.0, 2)
+        wins_avg_base = max(1, m.winning_trades)
+        losses_avg_base = max(1, m.losing_trades)
+        win_sum = ((m.avg_win * (wins_avg_base - 1)) + (pnl if pnl > 0 else 0.0))
+        loss_sum = ((m.avg_loss * (losses_avg_base - 1)) + (pnl if pnl <= 0 else 0.0))
+        m.avg_win = round(win_sum / wins_avg_base, 2) if m.winning_trades else 0.0
+        m.avg_loss = round(loss_sum / losses_avg_base, 2) if m.losing_trades else 0.0
+        m.last_5_trades.append(
+            {
+                "signal_id": trade.get("signal_id"),
+                "symbol": trade.get("symbol"),
+                "signal": trade.get("signal"),
+                "entry_price": trade.get("entry_price"),
+                "exit_price": trade.get("exit_price"),
+                "pnl": pnl,
+                "closed_at": trade.get("closed_at"),
+            }
+        )
+        if len(m.last_5_trades) > 5:
+            m.last_5_trades = m.last_5_trades[-5:]
 
     def snapshot(self) -> Dict:
         return {
@@ -68,7 +102,17 @@ class MetricsService:
             "avg_tick_to_process_latency_ms": round(self.metrics.average_tick_to_process_latency_ms, 3),
             "avg_process_to_signal_latency_ms": round(self.metrics.average_process_to_signal_latency_ms, 3),
             "avg_total_signal_latency_ms": round(self.metrics.average_total_signal_latency_ms, 3),
+            "option_data_latency_ms": round(self.metrics.option_data_latency_ms, 3),
             "engine_exec_ms": dict(self.metrics.engine_exec_ms),
             "confidence_distribution": dict(self.metrics.confidence_distribution),
+            "total_trades": self.metrics.total_trades,
+            "winning_trades": self.metrics.winning_trades,
+            "losing_trades": self.metrics.losing_trades,
+            "win_rate": round(self.metrics.win_rate, 2),
+            "total_pnl": round(self.metrics.total_pnl, 2),
+            "avg_win": round(self.metrics.avg_win, 2),
+            "avg_loss": round(self.metrics.avg_loss, 2),
+            "current_day_pnl": round(self.metrics.current_day_pnl, 2),
+            "last_5_trades": list(self.metrics.last_5_trades),
         }
 

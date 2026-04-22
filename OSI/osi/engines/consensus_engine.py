@@ -15,6 +15,8 @@ class ConsensusEngine:
             "mean_reversion_engine": 0.9,
             "option_chain_engine": 1.1,
             "ml_engine": 0.6,
+            "intrabar_engine": 1.6,
+            "smart_breakout_engine": 1.5,
         }
 
     def combine(
