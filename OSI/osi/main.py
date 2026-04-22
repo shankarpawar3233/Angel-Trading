@@ -11,6 +11,7 @@ from osi.infra.postgres_repo import PostgresRepository
 from osi.infra.redis_store import RedisStateStore
 from osi.services.metrics import MetricsService
 from osi.services.pipeline import OSIPipeline
+from osi.services.power_guard import PowerGuard
 
 setup_logging()
 
@@ -28,6 +29,7 @@ postgres_repo = PostgresRepository(settings.postgres_url)
 metrics = MetricsService()
 pipeline = OSIPipeline(redis_store=redis_store, postgres_repo=postgres_repo, metrics=metrics)
 tick_source = AngelWebSocketSource()
+power_guard = PowerGuard()
 
 app.include_router(build_router(pipeline))
 
@@ -40,6 +42,8 @@ async def health():
 @app.on_event("startup")
 async def startup_event():
     # Standalone default mode: keep runtime in-process, no external DB/cache required.
+    if getattr(settings, "prevent_sleep_windows", True):
+        power_guard.enable()
     await pipeline.start()
     await tick_source.start(pipeline.on_tick)
 
@@ -48,4 +52,5 @@ async def startup_event():
 async def shutdown_event():
     await tick_source.stop()
     await pipeline.stop()
+    power_guard.disable()
 
