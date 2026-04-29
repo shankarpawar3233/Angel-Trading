@@ -8,7 +8,7 @@ import queue
 import random
 import threading
 import time
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 import pyotp
@@ -27,6 +27,7 @@ TickHandler = Callable[[MarketTick], Awaitable[None]]
 class AngelWebSocketSource:
     def __init__(self) -> None:
         self.expiry_engine = ExpiryEngine()
+        self._enabled_symbols: List[str] = ["NIFTY"] + (["SENSEX"] if bool(settings.enable_sensex) else [])
         self._handler: Optional[TickHandler] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._task: asyncio.Task | None = None
@@ -40,10 +41,12 @@ class AngelWebSocketSource:
         self._index_tokens: Dict[str, Tuple[int, str]] = {}  # symbol -> (exchangeType, token)
         self._option_meta_by_token: Dict[str, Dict[str, Any]] = {}
         self._subscribed_option_tokens: Dict[str, Tuple[int, str]] = {}
-        self._desired_option_tokens_by_symbol: Dict[str, Dict[str, Tuple[int, str]]] = {"NIFTY": {}, "SENSEX": {}}
+        self._desired_option_tokens_by_symbol: Dict[str, Dict[str, Tuple[int, str]]] = {
+            sym: {} for sym in self._enabled_symbols
+        }
         self._current_atm: Dict[str, float] = {}
         self._index_prices: Dict[str, float] = {}
-        self._option_chain: Dict[str, Dict[str, Dict[str, Dict[str, float]]]] = {"NIFTY": {}, "SENSEX": {}}
+        self._option_chain: Dict[str, Dict[str, Dict[str, Dict[str, float]]]] = {sym: {} for sym in self._enabled_symbols}
         self._last_index_emit: Dict[str, float] = {}
         self._raw_tick_count: int = 0
         self._last_tick_log_ts: float = 0.0
@@ -184,8 +187,8 @@ class AngelWebSocketSource:
         except Exception:
             pass
 
-    def _on_close(self, _wsapp: Any) -> None:
-        logger.warning("SmartWebSocketV2 disconnected")
+    def _on_close(self, _wsapp: Any, *args: Any, **kwargs: Any) -> None:
+        logger.warning("SmartWebSocketV2 disconnected args=%s kwargs=%s", args, kwargs)
 
     def _on_data(self, _wsapp: Any, message: Any) -> None:
         rows = self._extract_rows(message)
@@ -224,6 +227,8 @@ class AngelWebSocketSource:
 
             symbol = self._index_symbol_from_token(token)
             if symbol:
+                if symbol not in self._enabled_symbols:
+                    continue
                 with self._lock:
                     self._index_prices[symbol] = ltp
                     if isinstance(exch_ts, datetime):
@@ -236,6 +241,8 @@ class AngelWebSocketSource:
             if not meta:
                 continue
             symbol = str(meta["symbol"])
+            if symbol not in self._enabled_symbols:
+                continue
             strike = str(meta["strike"])
             opt_type = str(meta["type"])
             with self._lock:
@@ -255,6 +262,8 @@ class AngelWebSocketSource:
             self._emit(symbol, now)
 
     def _emit(self, symbol: str, now_epoch: float) -> None:
+        if symbol not in self._enabled_symbols:
+            return
         if self._handler is None or self._loop is None:
             return
         with self._lock:
@@ -461,10 +470,11 @@ class AngelWebSocketSource:
             token = self._normalize_token(row.get("token"))
             if sym == "NIFTY" and token:
                 out["NIFTY"] = (1 if exch == "NSE" else 1, token)
-            elif sym == "SENSEX" and token:
+            elif sym == "SENSEX" and token and bool(settings.enable_sensex):
                 out["SENSEX"] = (3 if exch in ("BSE", "BSE_CM") else 3, token)
         out.setdefault("NIFTY", (1, "26000"))
-        out.setdefault("SENSEX", (3, "99919000"))
+        if bool(settings.enable_sensex):
+            out.setdefault("SENSEX", (3, "99919000"))
         return out
 
     def _index_symbol_from_token(self, token: str) -> Optional[str]:
@@ -540,6 +550,8 @@ class AngelWebSocketSource:
 
     @staticmethod
     def _extract_exchange_timestamp(row: Dict[str, Any]) -> Optional[datetime]:
+        ist_tz = timezone(timedelta(hours=5, minutes=30))
+        now_utc = datetime.now(timezone.utc)
         candidates = [
             row.get("exchange_timestamp"),
             row.get("exchangeTime"),
@@ -565,6 +577,8 @@ class AngelWebSocketSource:
                     elif iv > 10**12:
                         iv = iv // 10**3
                     dt = datetime.fromtimestamp(iv, tz=timezone.utc)
+                    if abs((now_utc - dt).total_seconds()) > 86400:
+                        continue
                     return dt
             except Exception:
                 pass
@@ -574,15 +588,21 @@ class AngelWebSocketSource:
                     continue
                 for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%d-%m-%Y %H:%M:%S"):
                     try:
-                        dt = datetime.strptime(txt, fmt).replace(tzinfo=timezone.utc)
+                        # Vendor strings are commonly in IST with no timezone attached.
+                        dt = datetime.strptime(txt, fmt).replace(tzinfo=ist_tz).astimezone(timezone.utc)
+                        if abs((now_utc - dt).total_seconds()) > 86400:
+                            continue
                         return dt
                     except ValueError:
                         continue
                 try:
                     dt = datetime.fromisoformat(txt.replace("Z", "+00:00"))
                     if dt.tzinfo is None:
-                        dt = dt.replace(tzinfo=timezone.utc)
-                    return dt.astimezone(timezone.utc)
+                        dt = dt.replace(tzinfo=ist_tz)
+                    dt_utc = dt.astimezone(timezone.utc)
+                    if abs((now_utc - dt_utc).total_seconds()) > 86400:
+                        continue
+                    return dt_utc
                 except Exception:
                     continue
         return None

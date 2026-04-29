@@ -67,12 +67,12 @@ copy osi/config.sample.env .env
 4) Start API:
 
 ```bash
-uvicorn osi.main:app --host 0.0.0.0 --port 8010 --reload
+uvicorn osi.main:app --host 0.0.0.0 --port 8011 --reload
 ```
 
 5) Open docs:
 
-- <http://localhost:8010/docs>
+- <http://localhost:8011/docs>
 
 ## Endpoints
 

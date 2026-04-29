@@ -8,18 +8,28 @@ class OSISettings(BaseSettings):
 
     app_name: str = "Options Signal Intelligence"
     app_host: str = "0.0.0.0"
-    app_port: int = 8010
+    app_port: int = 8011
+    enable_sensex: bool = True
+    prevent_sleep_windows: bool = True
 
     redis_url: str = "redis://localhost:6379/0"
     postgres_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/osi"
 
     min_signal_confidence: float = 40.0
+    signal_mode: str = "consensus"  # consensus | multi_strategy
+    strategy_confidence_floor: float = 35.0
+    strategy_fallback_enabled: bool = True
     target_multiplier: float = 1.4
     sl_multiplier: float = 0.8
     partial_target_multiplier: float = 1.2
-    market_exit_time_ist: str = "15:25"
+    market_exit_time_ist: str = "15:30"
     daily_loss_cap: float = 3000.0
     max_consecutive_sl: int = 3
+    execution_lots: float = 20.0
+    nifty_lots: float = 20.0
+    nifty_lot_size: float = 65.0
+    sensex_lots: float = 20.0
+    sensex_lot_size: float = 20.0
 
     use_sample_data: bool = True
     sample_tick_interval_ms: int = 200
@@ -52,6 +62,19 @@ class OSISettings(BaseSettings):
     smart_breakout_momentum_threshold: float = 2.0
     min_market_activity_threshold: float = 8.0
     market_activity_lookback_candles: int = 20
+    telegram_enabled: bool = False
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+    telegram_subscribers: str = ""
+    telegram_thread_id: int = 0
+    telegram_timeout_sec: float = 3.0
+    telegram_dashboard_url: str = "http://127.0.0.1:8011/dashboard"
+    telegram_screenshot_on_start: bool = True
+    telegram_screenshot_on_signal_create: bool = True
+    telegram_screenshot_on_signal_close: bool = True
+    telegram_screenshot_on_signal_update: bool = True
+    telegram_screenshot_width: int = 1440
+    telegram_screenshot_height: int = 900
 
 
 settings = OSISettings()

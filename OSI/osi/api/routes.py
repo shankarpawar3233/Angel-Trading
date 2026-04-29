@@ -38,6 +38,20 @@ def build_router(pipeline: OSIPipeline):
         rows = pipeline.signal_manager.snapshot_rejected()[-min(limit, 200) :]
         return {"rejected_signals": rows, "count": len(rows)}
 
+    @router.get("/signals/paper")
+    async def get_signals_paper(limit: int = 500) -> Dict:
+        rows = pipeline.signal_manager.snapshot_paper_signals()[-min(limit, 1000) :]
+        return {"paper_signals": rows, "count": len(rows)}
+
+    @router.get("/signals/paper/stats")
+    async def get_signals_paper_stats() -> Dict:
+        return pipeline.signal_manager.paper_engine_stats()
+
+    @router.get("/signals/strategy")
+    async def get_signals_strategy(limit: int = 200) -> Dict:
+        rows = pipeline.snapshot_strategy_signals(limit=min(limit, 1000))
+        return {"strategy_signals": rows, "count": len(rows)}
+
     @router.get("/history")
     async def get_history(limit: int = 100) -> Dict:
         db_rows = await pipeline.postgres_repo.fetch_history(limit=min(limit, 500))
@@ -59,6 +73,10 @@ def build_router(pipeline: OSIPipeline):
         data["target_latency_ms"] = 500
         data["within_latency_budget"] = data["average_latency_ms"] < 500
         return data
+
+    @router.get("/market/indices")
+    async def get_market_indices() -> Dict:
+        return pipeline.snapshot_market_indices()
 
     @router.websocket("/signals/live")
     async def ws_signals_live(ws: WebSocket):

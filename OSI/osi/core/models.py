@@ -12,6 +12,8 @@ SignalType = Literal["BUY_CE", "BUY_PE", "NONE"]
 
 
 class SignalStatus(str, Enum):
+    PENDING = "PENDING"
+    CONFIRMED = "CONFIRMED"
     ACTIVE = "ACTIVE"
     TARGET_HIT = "TARGET_HIT"
     SL_HIT = "SL_HIT"
@@ -63,15 +65,20 @@ class SignalRecord(BaseModel):
     signal: SignalType
     engine_signal: SignalType
     strategy: str = "scalping"
+    trigger_engine: str = ""
     confidence: float
     strength: float = 0.0
     status: SignalStatus = SignalStatus.ACTIVE
+    signal_tag: Literal["INTRABAR", "ZERO_HERO", "STANDARD"] = "STANDARD"
+    quality_tag: Literal["LOW", "NORMAL", "STRONG"] = "NORMAL"
+    trade_state: Literal["ACTIVE", "RECOVERED"] = "ACTIVE"
     expiry: str = ""
     entry_price: float
     current_ltp: Optional[float] = None
     stop_loss: float
     target_1: float = 0.0
     target_2: float = 0.0
+    target_3: Optional[float] = None
     target_price: float
     option_symbol: str
     strike: Optional[float] = None
@@ -86,6 +93,8 @@ class SignalRecord(BaseModel):
     max_adverse: float = 0.0
     confidence_breakdown: Dict[str, float] = Field(default_factory=dict)
     entry_time: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    recovered_at: Optional[datetime] = None
+    last_ltp_update_at: Optional[datetime] = None
     exit_time: Optional[datetime] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     closed_at: Optional[datetime] = None

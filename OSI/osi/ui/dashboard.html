@@ -18,61 +18,47 @@
       --border: #374151;
     }
     * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      font-family: Arial, sans-serif;
-      color: var(--text);
-      background: var(--bg);
-    }
-    .wrap { max-width: 1400px; margin: 0 auto; padding: 16px; }
-    .title {
-      display: flex; justify-content: space-between; align-items: center;
-      margin-bottom: 12px;
-    }
+    body { margin: 0; font-family: Arial, sans-serif; color: var(--text); background: var(--bg); }
+    .wrap { max-width: 1500px; margin: 0 auto; padding: 16px; }
+    .title { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
     .status { font-size: 14px; color: var(--muted); }
-    .status .dot {
-      display: inline-block; width: 10px; height: 10px; border-radius: 50%;
-      margin-right: 6px; background: var(--bad);
-    }
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(12, 1fr);
-      gap: 12px;
-    }
-    .card {
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 12px;
-    }
-    .card h3 { margin: 0 0 10px 0; font-size: 15px; color: var(--accent); }
-    .kpi { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-    .kpi-item { background: var(--panel-2); border-radius: 6px; padding: 8px; }
-    .kpi-item .label { font-size: 12px; color: var(--muted); }
-    .kpi-item .value { font-size: 18px; font-weight: bold; margin-top: 4px; }
+    .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; background: var(--bad); }
+    .grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 12px; }
+    .card { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+    .card h3 { margin: 0 0 10px; font-size: 15px; color: var(--accent); }
     .full { grid-column: span 12; }
     .span-8 { grid-column: span 8; }
     .span-6 { grid-column: span 6; }
     .span-4 { grid-column: span 4; }
-    .span-3 { grid-column: span 3; }
     table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    th, td { text-align: left; border-bottom: 1px solid var(--border); padding: 8px 6px; }
+    th, td { text-align: left; border-bottom: 1px solid var(--border); padding: 7px 6px; }
     th { color: var(--muted); font-weight: 600; }
-    .pill {
-      display: inline-block; padding: 3px 8px; border-radius: 999px; font-size: 12px;
-      background: var(--panel-2); border: 1px solid var(--border);
-    }
+    .table-scroll { max-height: 360px; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; }
+    .kpi { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+    .kpi-item { background: var(--panel-2); border-radius: 6px; padding: 8px; }
+    .label { font-size: 12px; color: var(--muted); }
+    .value { font-size: 18px; font-weight: bold; margin-top: 4px; }
+    .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--border); }
     .buy-ce { color: var(--ok); }
     .buy-pe { color: #f97316; }
     .none { color: var(--muted); }
     .pnl-pos { color: var(--ok); font-weight: 600; }
     .pnl-neg { color: var(--bad); font-weight: 600; }
-    .status-active { color: #60a5fa; font-weight: 600; }
+    .status-active { color: #60a5fa; font-weight: 700; }
+    .status-confirmed { color: #22c55e; font-weight: 700; }
+    .status-pending { color: #f59e0b; font-weight: 700; }
+    .best-engine { font-size: 16px; font-weight: 700; color: var(--ok); }
     .small { font-size: 12px; color: var(--muted); }
-    pre {
-      margin: 0; padding: 8px; border-radius: 6px; background: #020617;
-      border: 1px solid var(--border); overflow: auto; max-height: 260px; font-size: 12px;
-    }
+    .toolbar { display: flex; gap: 10px; align-items: center; margin-bottom: 8px; }
+    select { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); padding: 6px; border-radius: 6px; }
+    .index-card { display: grid; gap: 4px; }
+    .index-name { font-size: 14px; color: var(--muted); font-weight: 600; }
+    .index-ltp { font-size: 28px; font-weight: 700; line-height: 1.1; }
+    .index-change { font-size: 14px; font-weight: 600; }
+    .index-up { color: var(--ok); }
+    .index-down { color: var(--bad); }
+    .index-flat { color: var(--muted); }
+    .sparkline { width: 100%; height: 40px; display: block; margin-top: 4px; }
   </style>
 </head>
 <body>
@@ -81,330 +67,611 @@
       <h2>Options Signal Intelligence Dashboard</h2>
       <div class="status"><span class="dot" id="wsDot"></span><span id="wsText">Disconnected</span></div>
     </div>
+    <div class="grid" style="margin-bottom:12px;">
+      <div class="card span-6">
+        <h3>NIFTY</h3>
+        <div id="niftyCard" class="index-card"></div>
+      </div>
+      <div class="card span-6">
+        <h3>SENSEX</h3>
+        <div id="sensexCard" class="index-card"></div>
+      </div>
+    </div>
 
     <div class="grid">
-      <div class="card full">
-        <h3>Latency And Processing Metrics</h3>
-        <div class="kpi" id="metricsKpi"></div>
-      </div>
-
-      <div class="card full">
-        <h3>Performance Metrics</h3>
-        <div class="kpi" id="performanceKpi"></div>
-      </div>
-
-      <div class="card full">
-        <h3>Last 5 Trades Result</h3>
-        <table>
-          <thead>
-            <tr><th>Time</th><th>ID</th><th>Symbol</th><th>Signal</th><th>Entry</th><th>Exit</th><th>PnL</th></tr>
-          </thead>
-          <tbody id="lastTradesBody"></tbody>
-        </table>
-      </div>
-
-      <div class="card full">
-        <h3>TRADE MONITOR</h3>
-        <table>
-          <thead>
-            <tr>
-              <th>ID</th><th>Symbol</th><th>Type</th><th>Strategy</th><th>Entry</th><th>LTP</th><th>SL</th><th>Target</th><th>PnL</th><th>Status</th><th>Time</th>
-            </tr>
-          </thead>
-          <tbody id="tradeMonitorBody"></tbody>
-        </table>
-      </div>
-
       <div class="card span-8">
-        <h3>Active Signals</h3>
-        <table>
-          <thead>
-            <tr>
-              <th>ID</th><th>Symbol</th><th>Signal</th><th>Confidence</th><th>Status</th>
-              <th>Strike</th><th>Entry</th><th>LTP</th><th>SL</th><th>Target</th><th>Exit</th><th>Option</th>
-            </tr>
-          </thead>
-          <tbody id="signalsBody"></tbody>
-        </table>
+        <h3>1) Live Signals (Execution)</h3>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th><th>Symbol</th><th>Signal</th><th>Trigger Engine</th><th>Strike</th><th>Option</th><th>Qty</th><th>Status</th><th>Entry</th><th>LTP</th><th>SL</th><th>T2</th><th>Exit</th><th>PnL</th>
+              </tr>
+            </thead>
+            <tbody id="liveSignalsBody"></tbody>
+          </table>
+        </div>
       </div>
 
       <div class="card span-4">
-        <h3>Latest Live Decision</h3>
-        <div id="liveInfo" class="small">Waiting for live payload...</div>
-      </div>
-
-      <div class="card span-6">
-        <h3>Engine Outputs (Latest Tick)</h3>
-        <table>
-          <thead><tr><th>Engine</th><th>Signal</th><th>Strength</th></tr></thead>
-          <tbody id="enginesBody"></tbody>
-        </table>
-      </div>
-
-      <div class="card span-6">
-        <h3>Consensus Snapshot</h3>
-        <pre id="consensusJson">{}</pre>
+        <h3>6) Best Engine</h3>
+        <div id="bestEngineCard" class="best-engine">-</div>
+        <div id="bestEngineMeta" class="small"></div>
       </div>
 
       <div class="card full">
-        <h3>Non-Active Trade History</h3>
+        <h3>2) Engine Performance (Core Insight)</h3>
         <table>
           <thead>
             <tr>
-              <th>Time</th><th>Symbol</th><th>Signal</th><th>Confidence</th><th>Status</th>
-              <th>Strike</th><th>Entry</th><th>LTP</th><th>SL</th><th>Target</th><th>Exit</th><th>PnL</th>
+              <th>Engine</th><th>Trades</th><th>Win Rate</th><th>Avg PnL</th><th>Total PnL</th><th>Drawdown</th><th>Last 5</th>
             </tr>
           </thead>
-          <tbody id="historyBody"></tbody>
+          <tbody id="enginePerfBody"></tbody>
         </table>
+      </div>
+
+      <div class="card full">
+        <h3>2b) Independent Strategy Signals (No Consensus Filter)</h3>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Time</th><th>ID</th><th>Symbol</th><th>Strategy</th><th>Signal</th><th>Strike</th><th>Option</th><th>Entry</th><th>Target</th><th>Confidence</th><th>Strength</th><th>Source</th><th>Reason</th>
+              </tr>
+            </thead>
+            <tbody id="strategySignalsBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card full">
+        <h3>Execution History</h3>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Time</th><th>ID</th><th>Symbol</th><th>Signal</th><th>Strike</th><th>Option</th><th>Qty</th><th>Entry</th><th>Exit</th><th>PnL</th><th>Status</th><th>Reason</th>
+              </tr>
+            </thead>
+            <tbody id="historyBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card full">
+        <h3>3) Active Paper Positions</h3>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Time</th><th>Symbol</th><th>Signal</th><th>Trigger Engine</th><th>Strike</th><th>Option</th><th>Qty</th><th>Status</th><th>Entry</th><th>LTP</th><th>T2</th><th>Exit</th><th>PnL</th>
+              </tr>
+            </thead>
+            <tbody id="paperActiveBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card full">
+        <h3>3b) Paper Signals (Raw Data)</h3>
+        <div class="toolbar">
+          <label class="small" for="paperFilter">Filter by Engine:</label>
+          <select id="paperFilter">
+            <option value="ALL">ALL</option>
+            <option value="intrabar_engine">intrabar_engine</option>
+            <option value="smart_breakout_engine">smart_breakout_engine</option>
+            <option value="mean_reversion_engine">mean_reversion_engine</option>
+            <option value="zero_hero_engine">zero_hero_engine</option>
+          </select>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th><th>Symbol</th><th>Signal</th><th>Trigger Engine</th><th>Strike</th><th>Option</th><th>Qty</th><th>Status</th><th>Entry</th><th>LTP</th><th>SL</th><th>T2</th><th>PnL</th>
+              </tr>
+            </thead>
+            <tbody id="paperSignalsBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card span-8">
+        <h3>4) Rejected Signals (Debug)</h3>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr><th>Time</th><th>Symbol</th><th>Signal</th><th>Confidence</th><th>Reason</th></tr>
+            </thead>
+            <tbody id="rejectedBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card span-4">
+        <h3>Rejected Summary</h3>
+        <div class="kpi" id="rejectedSummary"></div>
+      </div>
+      <div class="card span-4">
+        <h3>Entry Filter Failures (Sub-check)</h3>
+        <div class="kpi" id="entryFilterSummary"></div>
+      </div>
+
+      <div class="card full">
+        <h3>5) System Health (Latency + WS)</h3>
+        <div class="kpi" id="systemHealthKpi"></div>
       </div>
     </div>
   </div>
 
   <script>
-    const state = { live: null };
-
+    const VISIBLE_ROWS = 15;
+    const state = {
+      paperSignals: [],
+      strategySignals: [],
+      wsHealth: { reconnects: 0 },
+      marketIndices: {
+        NIFTY: { ltp: 0, change: 0, change_percent: 0, trend: "FLAT", ticks: [] },
+        SENSEX: { ltp: 0, change: 0, change_percent: 0, trend: "FLAT", ticks: [] },
+      },
+    };
+    function num(v, d = 2) {
+      if (v === null || v === undefined || Number.isNaN(Number(v))) return "-";
+      return Number(v).toFixed(d);
+    }
     function signalClass(sig) {
       if (sig === "BUY_CE") return "buy-ce";
       if (sig === "BUY_PE") return "buy-pe";
       return "none";
     }
-
-    function num(v, d = 2) {
-      if (v === null || v === undefined || Number.isNaN(Number(v))) return "-";
-      return Number(v).toFixed(d);
-    }
-
-    function renderMetrics(metrics) {
-      const latencyItems = [
-        ["Ticks Processed", metrics.ticks_processed],
-        ["Pipeline Errors", metrics.pipeline_errors],
-        ["Avg Total Latency (ms)", num(metrics.avg_total_signal_latency_ms, 1)],
-        ["Tick -> Process (ms)", num(metrics.tick_to_process_latency_ms, 1)],
-        ["Process -> Signal (ms)", num(metrics.process_to_signal_latency_ms, 1)],
-        ["Total Signal (ms)", num(metrics.total_signal_latency_ms, 1)],
-        ["Avg Latency (ms)", num(metrics.average_latency_ms, 1)],
-        ["Max Latency (ms)", num(metrics.max_latency_ms, 1)],
-        ["Latency Budget", metrics.within_latency_budget ? "OK" : "Above 500"],
-      ];
-      const el = document.getElementById("metricsKpi");
-      el.innerHTML = latencyItems.map(([k, v]) =>
-        `<div class="kpi-item"><div class="label">${k}</div><div class="value">${v}</div></div>`
-      ).join("");
-
-      const perfItems = [
-        ["Win Rate %", num(metrics.win_rate, 2)],
-        ["Total Trades", metrics.total_trades ?? 0],
-        ["Winning Trades", metrics.winning_trades ?? 0],
-        ["Losing Trades", metrics.losing_trades ?? 0],
-        ["Total PnL", num(metrics.total_pnl, 2)],
-        ["Current Day PnL", num(metrics.current_day_pnl, 2)],
-        ["Avg Win", num(metrics.avg_win, 2)],
-        ["Avg Loss", num(metrics.avg_loss, 2)],
-      ];
-      const perfEl = document.getElementById("performanceKpi");
-      perfEl.innerHTML = perfItems.map(([k, v]) =>
-        `<div class="kpi-item"><div class="label">${k}</div><div class="value">${v}</div></div>`
-      ).join("");
-
-      renderLastTrades(metrics.last_5_trades || []);
-    }
-
-    function renderLastTrades(rows) {
-      const body = document.getElementById("lastTradesBody");
-      if (!rows.length) {
-        body.innerHTML = `<tr><td colspan="7" class="small">No closed trades yet</td></tr>`;
-        return;
-      }
-      body.innerHTML = rows.slice().reverse().map(row => `
-        <tr>
-          <td>${row.closed_at || "-"}</td>
-          <td>${row.signal_id || "-"}</td>
-          <td>${row.symbol || "-"}</td>
-          <td><span class="pill ${signalClass(row.signal)}">${row.signal || "-"}</span></td>
-          <td>${num(row.entry_price)}</td>
-          <td>${num(row.exit_price)}</td>
-          <td>${num(row.pnl)}</td>
-        </tr>
-      `).join("");
-    }
-
-    function renderSignals(cards) {
-      const body = document.getElementById("signalsBody");
-      if (!cards.length) {
-        body.innerHTML = `<tr><td colspan="13" class="small">No active signals</td></tr>`;
-        return;
-      }
-      body.innerHTML = cards.map(row => `
-        <tr>
-          <td>${row.signal_id}</td>
-          <td>${row.symbol}</td>
-          <td><span class="pill ${signalClass(row.signal)}">${row.signal}</span></td>
-          <td>${num(row.confidence, 1)}</td>
-          <td>${row.status}</td>
-          <td>${num(row.strike, 0)}</td>
-          <td>${num(row.entry_price)}</td>
-          <td>${num(row.current_ltp)}</td>
-          <td>${num(row.stop_loss)}</td>
-          <td>${num(row.target_price)}</td>
-          <td>${num(row.exit_price)}</td>
-          <td>${row.option_symbol}</td>
-        </tr>
-      `).join("");
-    }
-
-    function renderHistory(rows) {
-      const body = document.getElementById("historyBody");
-      if (!rows.length) {
-        body.innerHTML = `<tr><td colspan="12" class="small">No non-active trades yet</td></tr>`;
-        return;
-      }
-      body.innerHTML = rows.slice(0, 30).map(row => `
-        <tr>
-          <td>${row.created_at || "-"}</td>
-          <td>${row.symbol || "-"}</td>
-          <td><span class="pill ${signalClass(row.signal || row.engine_signal)}">${row.signal || row.engine_signal || "-"}</span></td>
-          <td>${num(row.confidence, 1)}</td>
-          <td>${row.status || "-"}</td>
-          <td>${num(row.strike, 0)}</td>
-          <td>${num(row.entry_price)}</td>
-          <td>${num(row.current_ltp)}</td>
-          <td>${num(row.stop_loss)}</td>
-          <td>${num(row.target_price)}</td>
-          <td>${num(row.exit_price)}</td>
-          <td>${num(row.pnl)}</td>
-        </tr>
-      `).join("");
-    }
-
     function pnlClass(v) {
       const n = Number(v);
       if (Number.isNaN(n)) return "";
       return n >= 0 ? "pnl-pos" : "pnl-neg";
     }
-
     function statusClass(v) {
-      return String(v || "").toUpperCase() === "ACTIVE" ? "status-active" : "";
+      const s = String(v || "").toUpperCase();
+      if (s === "ACTIVE") return "status-active";
+      if (s === "CONFIRMED") return "status-confirmed";
+      if (s === "PENDING") return "status-pending";
+      return "";
     }
-
-    function renderTradeMonitor(activeRows, historyRows) {
-      const body = document.getElementById("tradeMonitorBody");
-      const merged = [...(activeRows || []), ...(historyRows || [])]
-        .sort((a, b) => new Date(b.entry_time || b.created_at || 0) - new Date(a.entry_time || a.created_at || 0))
-        .slice(0, 40);
-      if (!merged.length) {
-        body.innerHTML = `<tr><td colspan="11" class="small">No trades yet</td></tr>`;
-        return;
+    function strikeStep(symbol) {
+      return symbol === "SENSEX" ? 100 : 50;
+    }
+    function livePnl(row) {
+      const final = Number(row?.pnl);
+      if (!Number.isNaN(final)) return final;
+      const entry = Number(row?.entry_price || 0);
+      const ltp = Number(row?.current_ltp || 0);
+      const qty = Number(row?.remaining_qty ?? row?.quantity ?? 0);
+      const realized = Number(row?.realized_pnl || 0);
+      if (entry <= 0 || ltp <= 0 || qty <= 0) return NaN;
+      const side = String(row?.signal || "");
+      const move = side === "BUY_PE" ? (entry - ltp) : (ltp - entry);
+      return realized + (move * qty);
+    }
+    function closeReason(row) {
+      if (row?.reason) return row.reason;
+      const events = Array.isArray(row?.lifecycle_events) ? row.lifecycle_events : [];
+      for (let i = events.length - 1; i >= 0; i -= 1) {
+        const r = events[i]?.reason;
+        if (r) return r;
       }
-      body.innerHTML = merged.map(row => {
-        const sig = row.signal || row.engine_signal || "-";
-        const typeText = sig === "BUY_CE" ? "CE" : (sig === "BUY_PE" ? "PE" : "-");
-        const target = row.target_2 ?? row.target_price;
-        const ltp = row.current_ltp ?? row.exit_price;
-        return `
-          <tr>
-            <td>${row.signal_id || "-"}</td>
-            <td>${row.symbol || "-"}</td>
-            <td><span class="pill ${signalClass(sig)}">${typeText}</span></td>
-            <td>${row.strategy || "-"}</td>
-            <td>${num(row.entry_price)}</td>
-            <td>${num(ltp)}</td>
-            <td>${num(row.stop_loss)}</td>
-            <td>${num(target)}</td>
-            <td class="${pnlClass(row.pnl)}">${num(row.pnl)}</td>
-            <td class="${statusClass(row.status)}">${row.status || "-"}</td>
-            <td>${row.entry_time || row.created_at || "-"}</td>
-          </tr>
-        `;
-      }).join("");
+      return "-";
     }
-
-    function renderLive(payload) {
-      state.live = payload;
-      const engines = payload.engine_outputs || [];
-      const engineBody = document.getElementById("enginesBody");
-      if (!engines.length) {
-        engineBody.innerHTML = `<tr><td colspan="3" class="small">No engine output yet</td></tr>`;
-      } else {
-        engineBody.innerHTML = engines.map(e => `
-          <tr>
-            <td>${e.engine}</td>
-            <td><span class="pill ${signalClass(e.signal)}">${e.signal}</span></td>
-            <td>${num(e.strength, 3)}</td>
-          </tr>
-        `).join("");
-      }
-
-      document.getElementById("consensusJson").textContent = JSON.stringify(payload.consensus || {}, null, 2);
-      document.getElementById("liveInfo").innerHTML = `
-        <div><b>Symbol:</b> ${payload.symbol || "-"}</div>
-        <div><b>Index Price:</b> ${num(payload.index_price)}</div>
-        <div><b>Regime:</b> ${payload.regime || "-"}</div>
-        <div><b>Timestamp:</b> ${payload.timestamp || "-"}</div>
-        <div><b>Candle:</b> ${(payload.candle && payload.candle.timeframe) ? payload.candle.timeframe : "-"}</div>
-      `;
+    function atmStrike(symbol, price) {
+      const px = Number(price);
+      if (Number.isNaN(px) || px <= 0) return "-";
+      const step = strikeStep(symbol);
+      return String(Math.round(px / step) * step);
     }
-
+    function sortByTimestampDesc(rows, key = "timestamp") {
+      return (rows || []).slice().sort((a, b) => {
+        const ta = new Date(a?.[key] || 0).getTime();
+        const tb = new Date(b?.[key] || 0).getTime();
+        return tb - ta;
+      });
+    }
+    function fmtIst12(ts) {
+      if (!ts) return "-";
+      const d = new Date(ts);
+      if (Number.isNaN(d.getTime())) return String(ts);
+      return d.toLocaleString("en-IN", {
+        timeZone: "Asia/Kolkata",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: true,
+      });
+    }
+    function istDateKey(ts) {
+      const d = ts ? new Date(ts) : new Date();
+      const parts = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "Asia/Kolkata",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).formatToParts(d);
+      const y = parts.find(p => p.type === "year")?.value || "0000";
+      const m = parts.find(p => p.type === "month")?.value || "00";
+      const day = parts.find(p => p.type === "day")?.value || "00";
+      return `${y}-${m}-${day}`;
+    }
+    function isTodayIst(ts) {
+      if (!ts) return false;
+      return istDateKey(ts) === istDateKey();
+    }
     async function fetchJson(path) {
       const res = await fetch(path);
       if (!res.ok) throw new Error(`${path} failed: ${res.status}`);
       return res.json();
     }
+    function renderLiveSignals(rows) {
+      const body = document.getElementById("liveSignalsBody");
+      if (!rows.length) {
+        body.innerHTML = `<tr><td colspan="13" class="small">No live signals</td></tr>`;
+        return;
+      }
+      const sorted = sortByTimestampDesc(rows, "entry_time").slice(0, VISIBLE_ROWS);
+      body.innerHTML = sorted.map(r => `
+        <tr>
+          <td>${r.signal_id || "-"}</td>
+          <td>${r.symbol || "-"}</td>
+          <td><span class="pill ${signalClass(r.signal)}">${r.signal || "-"}</span></td>
+          <td>${r.trigger_engine || r.strategy || "-"}</td>
+          <td>${r.strike ?? "-"}</td>
+          <td>${r.option_symbol || "-"}</td>
+          <td>${num(r.quantity, 0)}</td>
+          <td class="${statusClass(r.status)}">${r.status || "-"}</td>
+          <td>${num(r.entry_price)}</td>
+          <td>${num(r.current_ltp)}</td>
+          <td>${num(r.stop_loss)}</td>
+          <td>${num(r.target_2 ?? r.target_price)}</td>
+          <td class="${pnlClass(livePnl(r))}">${num(livePnl(r))}</td>
+        </tr>
+      `).join("");
+      renderIndexCards(rows);
+    }
+    function renderHistory(rows) {
+      const body = document.getElementById("historyBody");
+      const todayRows = (rows || []).filter(r => isTodayIst(r.exit_time || r.closed_at || r.entry_time));
+      const items = sortByTimestampDesc(todayRows, "exit_time").slice(0, VISIBLE_ROWS);
+      if (!items.length) {
+        body.innerHTML = `<tr><td colspan="12" class="small">No today's history yet</td></tr>`;
+        return;
+      }
+      body.innerHTML = items.map(r => `
+        <tr>
+          <td>${fmtIst12(r.exit_time || r.closed_at || r.entry_time)}</td>
+          <td>${r.signal_id || "-"}</td>
+          <td>${r.symbol || "-"}</td>
+          <td><span class="pill ${signalClass(r.signal)}">${r.signal || "-"}</span></td>
+          <td>${r.strike ?? "-"}</td>
+          <td>${r.option_symbol || "-"}</td>
+          <td>${num(r.quantity, 0)}</td>
+          <td>${num(r.entry_price)}</td>
+          <td>${num(r.exit_price)}</td>
+          <td class="${pnlClass(r.pnl)}">${num(r.pnl)}</td>
+          <td>${r.status || "-"}</td>
+          <td>${closeReason(r)}</td>
+        </tr>
+      `).join("");
+    }
+    function sparklineSvg(values, cls) {
+      const pts = (values || []).map(Number).filter(v => !Number.isNaN(v));
+      if (pts.length < 2) return `<div class="small">Sparkline: waiting...</div>`;
+      const min = Math.min(...pts);
+      const max = Math.max(...pts);
+      const span = Math.max(0.0001, max - min);
+      const w = 220;
+      const h = 40;
+      const coords = pts.map((v, i) => {
+        const x = (i / (pts.length - 1)) * (w - 2) + 1;
+        const y = h - (((v - min) / span) * (h - 4) + 2);
+        return `${x.toFixed(1)},${y.toFixed(1)}`;
+      }).join(" ");
+      return `<svg class="sparkline" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><polyline points="${coords}" fill="none" stroke="currentColor" stroke-width="2" class="${cls}"></polyline></svg>`;
+    }
+    function renderIndexCards(rows) {
+      const bySymbol = { NIFTY: [], SENSEX: [] };
+      (rows || []).forEach(r => {
+        const s = String(r.symbol || "");
+        if (bySymbol[s]) bySymbol[s].push(r);
+      });
+      const build = (sym) => {
+        const idx = state.marketIndices?.[sym] || {};
+        const ltp = Number(idx.ltp || 0);
+        const change = Number(idx.change || 0);
+        const changePct = Number(idx.change_percent || 0);
+        const trend = String(idx.trend || "FLAT").toUpperCase();
+        const colorCls = change > 0 ? "index-up" : (change < 0 ? "index-down" : "index-flat");
+        const active = bySymbol[sym] || [];
+        const activeText = active.length ? `Active trades: ${active.length}` : "No active trades";
+        return `
+          <div class="index-name">${sym}</div>
+          <div class="index-ltp">${ltp > 0 ? num(ltp, 2) : "-"}</div>
+          <div class="index-change ${colorCls}">${change >= 0 ? "+" : ""}${num(change, 2)} (${changePct >= 0 ? "+" : ""}${num(changePct, 2)}%)</div>
+          <div class="small">ATM: ${ltp > 0 ? atmStrike(sym, ltp) : "-"} | Trend: <span class="${colorCls}">${trend}</span></div>
+          <div class="small">${activeText}</div>
+          ${sparklineSvg(idx.ticks || [], colorCls)}
+        `;
+      };
+      document.getElementById("niftyCard").innerHTML = build("NIFTY");
+      document.getElementById("sensexCard").innerHTML = build("SENSEX");
+    }
+    function updateMarketIndices(data) {
+      if (!data || typeof data !== "object") return;
+      for (const sym of ["NIFTY", "SENSEX"]) {
+        if (data[sym] && typeof data[sym] === "object") {
+          state.marketIndices[sym] = data[sym];
+        }
+      }
+    }
+    function renderEnginePerf(stats) {
+      const body = document.getElementById("enginePerfBody");
+      const rows = Object.entries(stats || {});
+      if (!rows.length) {
+        body.innerHTML = `<tr><td colspan="7" class="small">No engine stats</td></tr>`;
+        return;
+      }
+      body.innerHTML = rows.map(([name, s]) => `
+        <tr>
+          <td>${name}</td>
+          <td>${num(s.total_signals, 0)}</td>
+          <td>${num(s.win_rate)}%</td>
+          <td class="${pnlClass(s.avg_pnl)}">${num(s.avg_pnl)}</td>
+          <td class="${pnlClass(s.total_pnl)}">${num(s.total_pnl)}</td>
+          <td class="pnl-neg">${num(s.max_drawdown)}</td>
+          <td>${(s.last_5_results || []).join(" ") || "-"}</td>
+        </tr>
+      `).join("");
 
-    async function refreshRest() {
+      let best = null;
+      for (const [name, s] of rows) {
+        const score = (Number(s.win_rate || 0) * 0.7) + (Number(s.total_pnl || 0) * 0.3) - (Number(s.max_drawdown || 0) * 0.1);
+        if (!best || score > best.score) best = { name, score, s };
+      }
+      if (best) {
+        document.getElementById("bestEngineCard").textContent = best.name;
+        document.getElementById("bestEngineMeta").textContent =
+          `Score ${num(best.score)} | WR ${num(best.s.win_rate)}% | PnL ${num(best.s.total_pnl)} | DD ${num(best.s.max_drawdown)}`;
+      }
+    }
+    function renderPaperSignals(rows) {
+      state.paperSignals = (rows || []).filter(r => isTodayIst(r.timestamp));
+      renderPaperActivePositions(state.paperSignals);
+      applyPaperFilter();
+    }
+    function renderStrategySignals(rows) {
+      const body = document.getElementById("strategySignalsBody");
+      state.strategySignals = (rows || []).filter(r => isTodayIst(r.timestamp));
+      const items = sortByTimestampDesc(state.strategySignals, "timestamp").slice(0, VISIBLE_ROWS);
+      if (!items.length) {
+        body.innerHTML = `<tr><td colspan="13" class="small">No independent strategy signals yet</td></tr>`;
+        return;
+      }
+      body.innerHTML = items.map(r => `
+        <tr>
+          <td>${fmtIst12(r.timestamp)}</td>
+          <td>${r.id || "-"}</td>
+          <td>${r.symbol || "-"}</td>
+          <td>${r.engine || "-"}</td>
+          <td><span class="pill ${signalClass(r.signal)}">${r.signal || "-"}</span></td>
+          <td>${r.strike ?? "-"}</td>
+          <td>${r.option_symbol || "-"}</td>
+          <td>${num(r.entry_price)}</td>
+          <td>${num(r.target_price)}</td>
+          <td>${num(r.confidence, 1)}</td>
+          <td>${num(r.strength, 3)}</td>
+          <td>${r.source || "-"}</td>
+          <td>${r.reason || "-"}</td>
+        </tr>
+      `).join("");
+    }
+    function deriveActivePaperPositions(rows) {
+      const sorted = sortByTimestampDesc(rows || [], "timestamp");
+      const latestByKey = new Map();
+      for (const row of sorted) {
+        const symbol = String(row?.symbol || "");
+        const option = String(row?.option_symbol || "");
+        const engine = String(row?.engine || "");
+        if (!symbol || !option || !engine) continue;
+        const key = `${symbol}|${option}|${engine}`;
+        if (!latestByKey.has(key)) latestByKey.set(key, row);
+      }
+      return Array.from(latestByKey.values());
+    }
+    function paperPnl(row) {
+      const n = Number(row?.simulated_pnl);
+      if (!Number.isNaN(n)) return n;
+      const entry = Number(row?.entry_price || 0);
+      const ltp = Number(row?.current_ltp ?? row?.option_ltp ?? 0);
+      const qty = Number(row?.qty || 0);
+      if (entry <= 0 || ltp <= 0 || qty <= 0) return NaN;
+      const side = String(row?.signal || "");
+      const move = side === "BUY_PE" ? (entry - ltp) : (ltp - entry);
+      return move * qty;
+    }
+    function renderPaperActivePositions(rows) {
+      const body = document.getElementById("paperActiveBody");
+      const active = deriveActivePaperPositions(rows).slice(0, VISIBLE_ROWS);
+      if (!active.length) {
+        body.innerHTML = `<tr><td colspan="13" class="small">No active paper positions</td></tr>`;
+        return;
+      }
+      body.innerHTML = active.map(r => `
+        <tr>
+          <td>${fmtIst12(r.timestamp)}</td>
+          <td>${r.symbol || "-"}</td>
+          <td><span class="pill ${signalClass(r.signal)}">${r.signal || "-"}</span></td>
+          <td>${r.engine || "-"}</td>
+          <td>${r.strike ?? "-"}</td>
+          <td>${r.option_symbol || "-"}</td>
+          <td>${num(r.qty, 0)}</td>
+          <td>${r.status || "PAPER"}</td>
+          <td>${num(r.entry_price)}</td>
+          <td>${num(r.current_ltp ?? r.option_ltp)}</td>
+          <td>${num(r.paper_target)}</td>
+          <td>${num(r.paper_exit ?? r.current_ltp ?? r.option_ltp)}</td>
+          <td class="${pnlClass(paperPnl(r))}">${num(paperPnl(r))}</td>
+        </tr>
+      `).join("");
+    }
+    function applyPaperFilter() {
+      const filter = document.getElementById("paperFilter").value;
+      const body = document.getElementById("paperSignalsBody");
+      const rows = sortByTimestampDesc(
+        state.paperSignals.filter(r => filter === "ALL" ? true : r.engine === filter),
+        "timestamp"
+      ).slice(0, VISIBLE_ROWS);
+      if (!rows.length) {
+        body.innerHTML = `<tr><td colspan="14" class="small">No paper signals</td></tr>`;
+        return;
+      }
+      body.innerHTML = rows.map(r => `
+        <tr>
+          <td>${r.paper_id || "-"}</td>
+          <td>${r.symbol || "-"}</td>
+          <td><span class="pill ${signalClass(r.signal)}">${r.signal || "-"}</span></td>
+          <td>${r.engine || "-"}</td>
+          <td>${r.strike ?? "-"}</td>
+          <td>${r.option_symbol || "-"}</td>
+          <td>${num(r.qty, 0)}</td>
+          <td>${r.status || "PAPER"}</td>
+          <td>${num(r.entry_price)}</td>
+          <td>${num(r.current_ltp ?? r.option_ltp)}</td>
+          <td>-</td>
+          <td>${num(r.paper_target)}</td>
+          <td>${num(r.paper_exit ?? r.current_ltp ?? r.option_ltp)}</td>
+          <td class="${pnlClass(r.simulated_pnl)}">${num(r.simulated_pnl)}</td>
+        </tr>
+      `).join("");
+    }
+    function renderRejected(rows) {
+      const body = document.getElementById("rejectedBody");
+      const summary = document.getElementById("rejectedSummary");
+      const entryFilterSummary = document.getElementById("entryFilterSummary");
+      const items = (rows || []).filter(r => isTodayIst(r.timestamp));
+      const counts = {};
+      const entryFailCounts = {};
+      for (const r of items) {
+        const k = r.reason || "unknown";
+        counts[k] = (counts[k] || 0) + 1;
+        const notes = Array.isArray(r?.notes) ? r.notes : [];
+        for (const note of notes) {
+          const text = String(note || "");
+          if (!text.startsWith("entry_filter_fail:")) continue;
+          const subCheck = text.replace("entry_filter_fail:", "") || "unknown";
+          entryFailCounts[subCheck] = (entryFailCounts[subCheck] || 0) + 1;
+        }
+      }
+      summary.innerHTML = Object.entries(counts).slice(0, 8).map(([k, v]) =>
+        `<div class="kpi-item"><div class="label">${k}</div><div class="value">${v}</div></div>`
+      ).join("");
+      entryFilterSummary.innerHTML = Object.entries(entryFailCounts).slice(0, 8).map(([k, v]) =>
+        `<div class="kpi-item"><div class="label">${k}</div><div class="value">${v}</div></div>`
+      ).join("") || `<div class="kpi-item"><div class="label">entry_filter_fail</div><div class="value">0</div></div>`;
+      if (!items.length) {
+        body.innerHTML = `<tr><td colspan="5" class="small">No today's rejected signals</td></tr>`;
+        return;
+      }
+      const latest = sortByTimestampDesc(items, "timestamp").slice(0, VISIBLE_ROWS);
+      body.innerHTML = latest.map(r => `
+        <tr>
+          <td>${fmtIst12(r.timestamp)}</td>
+          <td>${r.symbol || "-"}</td>
+          <td><span class="pill ${signalClass(r.signal)}">${r.signal || "-"}</span></td>
+          <td>${num(r.confidence, 1)}</td>
+          <td>${r.reason || "-"}</td>
+        </tr>
+      `).join("");
+    }
+    function renderSystemHealth(metrics, wsPayload) {
+      const kpi = document.getElementById("systemHealthKpi");
+      const items = [
+        ["Avg Signal Latency (ms)", num(metrics.avg_total_signal_latency_ms, 1)],
+        ["Tick->Process (ms)", num(metrics.tick_to_process_latency_ms, 1)],
+        ["Process->Signal (ms)", num(metrics.process_to_signal_latency_ms, 1)],
+        ["Queue Size", String(metrics.queue_size ?? "-")],
+        ["Reconnects", String(metrics.reconnects ?? state.wsHealth.reconnects ?? "-")],
+        ["Dropped Ticks", String(metrics.dropped_ticks ?? "-")],
+        ["WS Dropped Payloads", String(metrics.ws_dropped_payloads ?? "-")],
+        ["Pipeline Errors", String(metrics.pipeline_errors ?? 0)],
+      ];
+      kpi.innerHTML = items.map(([k, v]) =>
+        `<div class="kpi-item"><div class="label">${k}</div><div class="value">${v}</div></div>`
+      ).join("");
+    }
+    async function refreshIndices() {
       try {
-        const [signals, metrics, history, activeSignals, historySignals] = await Promise.all([
-          fetchJson("/signals"),
-          fetchJson("/metrics"),
-          fetchJson("/history?limit=100"),
+        const market = await fetchJson("/market/indices");
+        updateMarketIndices(market || {});
+        const active = await fetchJson("/signals/active");
+        renderIndexCards(active.active_signals || []);
+      } catch (err) {
+        console.error("indices refresh failed", err);
+      }
+    }
+    async function refreshAll() {
+      try {
+        const [active, history, paperStats, paper, strategy, rejected, metrics, market] = await Promise.all([
           fetchJson("/signals/active"),
           fetchJson("/signals/history?limit=200"),
+          fetchJson("/signals/paper/stats"),
+          fetchJson("/signals/paper?limit=1000"),
+          fetchJson("/signals/strategy?limit=1000"),
+          fetchJson("/signals/rejected?limit=500"),
+          fetchJson("/metrics"),
+          fetchJson("/market/indices"),
         ]);
-        renderSignals(signals.cards || []);
-        renderMetrics(metrics || {});
-        renderHistory(history.non_active_history || []);
-        renderTradeMonitor(activeSignals.active_signals || [], historySignals.history || []);
+        updateMarketIndices(market || {});
+        renderLiveSignals(active.active_signals || []);
+        renderHistory(history.history || []);
+        renderEnginePerf(paperStats || {});
+        renderPaperSignals(paper.paper_signals || []);
+        renderStrategySignals(strategy.strategy_signals || []);
+        renderRejected(rejected.rejected_signals || []);
+        renderSystemHealth(metrics || {}, null);
       } catch (err) {
         console.error(err);
       }
     }
-
     function openLiveSocket() {
       const protocol = location.protocol === "https:" ? "wss" : "ws";
       const ws = new WebSocket(`${protocol}://${location.host}/signals/live`);
       const dot = document.getElementById("wsDot");
       const text = document.getElementById("wsText");
-
-      ws.onopen = () => {
-        dot.style.background = "#22c55e";
-        text.textContent = "Connected";
-      };
+      ws.onopen = () => { dot.style.background = "#22c55e"; text.textContent = "Connected"; };
       ws.onclose = () => {
         dot.style.background = "#ef4444";
         text.textContent = "Disconnected (retrying...)";
+        state.wsHealth.reconnects += 1;
         setTimeout(openLiveSocket, 1500);
       };
-      ws.onerror = () => {
-        dot.style.background = "#f59e0b";
-        text.textContent = "WebSocket error";
-      };
+      ws.onerror = () => { dot.style.background = "#f59e0b"; text.textContent = "WebSocket error"; };
       ws.onmessage = (event) => {
         try {
           const payload = JSON.parse(event.data);
-          renderLive(payload);
-          if (payload.cards) renderSignals(payload.cards);
-          if (payload.active_signals || payload.history) {
-            renderTradeMonitor(payload.active_signals || [], payload.history || []);
-          }
+          if (payload.market_indices) updateMarketIndices(payload.market_indices);
+          if (payload.active_signals) renderLiveSignals(payload.active_signals);
+          if (payload.history) renderHistory(payload.history);
+          if (payload.paper_signals) renderPaperSignals(payload.paper_signals);
+          if (payload.strategy_signals) renderStrategySignals(payload.strategy_signals);
         } catch (err) {
           console.error("Bad WS payload", err);
         }
       };
     }
-
-    refreshRest();
+    document.getElementById("paperFilter").addEventListener("change", applyPaperFilter);
+    refreshAll();
     openLiveSocket();
-    setInterval(refreshRest, 5000);
+    setInterval(refreshAll, 5000);
+    setInterval(refreshIndices, 1000);
   </script>
 </body>
 </html>
