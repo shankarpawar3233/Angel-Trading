@@ -26,7 +26,8 @@ class MarketTick(BaseModel):
     received_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     exchange_timestamp: Optional[datetime] = None
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    option_chain: Dict[str, Dict[str, Dict[str, Any]]] = Field(default_factory=dict)
+    # expiry -> strike -> leg(CE/PE) -> market fields
+    option_chain: Dict[str, Dict[str, Dict[str, Dict[str, Any]]]] = Field(default_factory=dict)
     meta: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -40,7 +41,7 @@ class Candle(BaseModel):
     volume: float = 0.0
     start: datetime
     end: datetime
-    option_chain: Dict[str, Dict[str, Dict[str, Any]]] = Field(default_factory=dict)
+    option_chain: Dict[str, Dict[str, Dict[str, Dict[str, Any]]]] = Field(default_factory=dict)
     meta: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -82,6 +83,8 @@ class SignalRecord(BaseModel):
     target_price: float
     option_symbol: str
     strike: Optional[float] = None
+    option_type: Optional[str] = None
+    option_token: Optional[str] = None
     reason: str = ""
     exit_price: Optional[float] = None
     stop_reference_index: Optional[float] = None
@@ -124,8 +127,14 @@ class DashboardSignalCard(BaseModel):
 
 @dataclass
 class RuntimeMetrics:
+    ticks_received: int = 0
+    ticks_dropped: int = 0
     ticks_processed: int = 0
     pipeline_errors: int = 0
+    signals_generated: int = 0
+    signals_executed: int = 0
+    signals_rejected: int = 0
+    rejected_by_reason: Dict[str, int] = field(default_factory=dict)
     average_latency_ms: float = 0.0
     max_latency_ms: float = 0.0
     last_tick_latency_ms: float = 0.0

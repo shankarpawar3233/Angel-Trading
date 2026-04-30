@@ -71,13 +71,14 @@ class MLEngine(BaseEngine):
         pe_oi = 0.0
         ce_vol = 0.0
         pe_vol = 0.0
-        for row in tick.option_chain.values():
-            ce = row.get("CE", {})
-            pe = row.get("PE", {})
-            ce_oi += float(ce.get("oi", 0.0) or 0.0)
-            pe_oi += float(pe.get("oi", 0.0) or 0.0)
-            ce_vol += float(ce.get("volume", 0.0) or 0.0)
-            pe_vol += float(pe.get("volume", 0.0) or 0.0)
+        for by_strike in tick.option_chain.values():
+            for row in by_strike.values():
+                ce = row.get("CE", {})
+                pe = row.get("PE", {})
+                ce_oi += float(ce.get("oi", 0.0) or 0.0)
+                pe_oi += float(pe.get("oi", 0.0) or 0.0)
+                ce_vol += float(ce.get("volume", 0.0) or 0.0)
+                pe_vol += float(pe.get("volume", 0.0) or 0.0)
 
         total_oi = ce_oi + pe_oi + 1e-6
         total_vol = ce_vol + pe_vol + 1e-6

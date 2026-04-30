@@ -7,7 +7,7 @@ from collections import deque
 from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
-from typing import Deque, Dict, List, Optional, Tuple
+from typing import Any, Deque, Dict, List, Optional, Tuple
 from uuid import uuid4
 
 from osi.core.config import settings
@@ -78,81 +78,62 @@ class SignalManager:
             self._mark_rejected(tick, consensus, "risk_blocked", breakdown=self._empty_breakdown(float(consensus.confidence)))
             return None
         if not self._is_trade_time_open():
-            # User policy: do not record any signal/rejection rows outside market window.
-            return None
-
-        lead_engine = self._lead_engine(consensus)
-        regime = str(tick.meta.get("regime") or "").upper()
-        min_conf = max(30.0, float(settings.min_signal_confidence) - 8.0)
-        strong_any = any(float(row.strength) > 0.7 for row in consensus.engine_outputs)
-        directional_strength = max(
-            [float(row.strength) for row in consensus.engine_outputs if row.signal == consensus.signal] or [0.0]
-        )
-        if not self._mean_reversion_regime_allowed(
-            tick=tick,
-            consensus=consensus,
-            lead_engine=lead_engine,
-            regime=regime,
-            directional_strength=directional_strength,
-        ):
+            # Record explicit rejection instead of silently dropping.
             self._mark_rejected(
                 tick,
                 consensus,
-                "mean_reversion_throttled_trending",
-                notes=["regime=TRENDING", f"strength={directional_strength:.3f}"],
+                "outside_trade_window",
+                notes=[f"window=09:15-15:30", f"symbol={tick.symbol}"],
                 breakdown=self._empty_breakdown(float(consensus.confidence)),
             )
             return None
 
-        base_confidence = float(consensus.confidence)
-        if consensus.signal == "NONE":
-            fallback_signal, fallback_conf, fallback_note = self._aggressive_none_fallback(tick)
-            if fallback_signal != "NONE":
-                consensus.signal = fallback_signal
-                consensus.confidence = fallback_conf
-                base_confidence = float(fallback_conf)
-                self.logger.info(
-                    "AGGRESSIVE FALLBACK signal=%s confidence=%.2f note=%s symbol=%s",
-                    fallback_signal,
-                    float(fallback_conf),
-                    fallback_note,
-                    tick.symbol,
-                )
-            else:
-                breakdown = self._build_breakdown(
-                    base=base_confidence,
-                    primary=0.0,
-                    directional=0.0,
-                    vwap=0.0,
-                    regime=0.0,
-                    momentum=0.0,
-                    dead_zone=0.0,
-                    final=base_confidence,
-                )
-                self._mark_rejected(tick, consensus, "none_signal", breakdown=breakdown)
-                return None
-        low_quality_base = 10.0 <= base_confidence < 20.0
-        if base_confidence < 10.0:
-            self._mark_rejected(
-                tick,
-                consensus,
-                "low_base_confidence",
-                breakdown=self._build_breakdown(
-                    base=base_confidence,
-                    primary=0.0,
-                    directional=0.0,
-                    vwap=0.0,
-                    regime=0.0,
-                    momentum=0.0,
-                    dead_zone=0.0,
-                    final=base_confidence,
+        lead_engine = self._lead_engine(consensus)
+        regime = str(tick.meta.get("regime") or "").upper()
+        execution_only = True
+        hard_intrabar = self._is_hard_intrabar_override(consensus)
+        hard_intrabar_out = None
+        if hard_intrabar:
+            hard_intrabar_out = next(
+                (
+                    row
+                    for row in consensus.engine_outputs
+                    if row.engine == "intrabar_engine" and row.signal != "NONE" and float(row.strength or 0.0) >= 0.7
                 ),
+                None,
             )
-            return None
+            if hard_intrabar_out is not None:
+                consensus.signal = hard_intrabar_out.signal
+                consensus.confidence = float(
+                    hard_intrabar_out.confidence
+                    if hard_intrabar_out.confidence is not None
+                    else max(50.0, float(hard_intrabar_out.strength or 0.0) * 100.0)
+                )
+                lead_engine = "intrabar_engine"
+        directional_strength = max(
+            [float(row.strength) for row in consensus.engine_outputs if row.signal == consensus.signal] or [0.0]
+        )
+        if (not hard_intrabar) and (not execution_only):
+            if not self._mean_reversion_regime_allowed(
+                tick=tick,
+                consensus=consensus,
+                lead_engine=lead_engine,
+                regime=regime,
+                directional_strength=directional_strength,
+            ):
+                self._mark_rejected(
+                    tick,
+                    consensus,
+                    "mean_reversion_throttled_trending",
+                    notes=["regime=TRENDING", f"strength={directional_strength:.3f}"],
+                    breakdown=self._empty_breakdown(float(consensus.confidence)),
+                )
+                return None
 
+        base_confidence = float(consensus.confidence)
         primary_trigger = lead_engine in {"intrabar_engine", "smart_breakout_engine"}
-        primary_boost = 10.0 if primary_trigger else 0.0
-        directional_boost = min(12.0, directional_strength * 12.0)
+        primary_boost = 0.0
+        directional_boost = 0.0
         vwap_boost = 0.0
         regime_boost = 0.0
         momentum_adjustment = 0.0
@@ -161,29 +142,84 @@ class SignalManager:
         if primary_trigger:
             notes.append(f"primary_trigger={lead_engine}")
         notes.append(f"directional_strength={directional_strength:.3f}")
-        if low_quality_base:
-            notes.append("LOW_QUALITY_BASE")
+        low_quality_base = 10.0 <= base_confidence < 20.0
 
-        vwap = float(tick.meta.get("vwap") or 0.0)
-        if vwap > 0:
-            aligned = (tick.index_price > vwap and consensus.signal == "BUY_CE") or (
-                tick.index_price < vwap and consensus.signal == "BUY_PE"
-            )
-            if aligned:
-                vwap_boost = 6.0
-                notes.append("vwap_aligned")
-            else:
-                vwap_boost = -6.0
-                notes.append("vwap_misaligned")
-        if regime == "SIDEWAYS" and lead_engine == "mean_reversion_engine":
-            regime_boost = 4.0
-            notes.append("regime_sideways_meanrev_boost")
-        if regime == "TRENDING" and lead_engine in {"trend_engine", "smart_breakout_engine", "intrabar_engine"}:
-            regime_boost = 4.0
-            notes.append("regime_trending_breakout_boost")
-
-        # Confidence inflation control.
-        total_boost = min(20.0, primary_boost + directional_boost + vwap_boost + regime_boost)
+        if hard_intrabar:
+            notes.append("hard_intrabar_override")
+        else:
+            if execution_only and consensus.signal == "NONE":
+                self._mark_rejected(
+                    tick,
+                    consensus,
+                    "no_signal",
+                    notes=["decision_layer_returned_none"],
+                    breakdown=self._empty_breakdown(float(consensus.confidence)),
+                )
+                return None
+            if consensus.signal == "NONE":
+                fallback_signal, fallback_conf, fallback_note = self._aggressive_none_fallback(tick)
+                if fallback_signal != "NONE":
+                    consensus.signal = fallback_signal
+                    consensus.confidence = fallback_conf
+                    base_confidence = float(fallback_conf)
+                    self.logger.info(
+                        "AGGRESSIVE FALLBACK signal=%s confidence=%.2f note=%s symbol=%s",
+                        fallback_signal,
+                        float(fallback_conf),
+                        fallback_note,
+                        tick.symbol,
+                    )
+                else:
+                    breakdown = self._build_breakdown(
+                        base=base_confidence,
+                        primary=0.0,
+                        directional=0.0,
+                        vwap=0.0,
+                        regime=0.0,
+                        momentum=0.0,
+                        dead_zone=0.0,
+                        final=base_confidence,
+                    )
+                    self._mark_rejected(tick, consensus, "none_signal", breakdown=breakdown)
+                    return None
+            if base_confidence < 10.0:
+                self._mark_rejected(
+                    tick,
+                    consensus,
+                    "low_base_confidence",
+                    breakdown=self._build_breakdown(
+                        base=base_confidence,
+                        primary=0.0,
+                        directional=0.0,
+                        vwap=0.0,
+                        regime=0.0,
+                        momentum=0.0,
+                        dead_zone=0.0,
+                        final=base_confidence,
+                    ),
+                )
+                return None
+            if low_quality_base:
+                notes.append("LOW_QUALITY_BASE")
+            primary_boost = 10.0 if primary_trigger else 0.0
+            directional_boost = min(12.0, directional_strength * 12.0)
+            vwap = float(tick.meta.get("vwap") or 0.0)
+            if vwap > 0:
+                aligned = (tick.index_price > vwap and consensus.signal == "BUY_CE") or (
+                    tick.index_price < vwap and consensus.signal == "BUY_PE"
+                )
+                if aligned:
+                    vwap_boost = 6.0
+                    notes.append("vwap_aligned")
+                else:
+                    vwap_boost = -6.0
+                    notes.append("vwap_misaligned")
+            if regime == "SIDEWAYS" and lead_engine == "mean_reversion_engine":
+                regime_boost = 4.0
+                notes.append("regime_sideways_meanrev_boost")
+            if regime == "TRENDING" and lead_engine in {"trend_engine", "smart_breakout_engine", "intrabar_engine"}:
+                regime_boost = 4.0
+                notes.append("regime_trending_breakout_boost")
 
         active = self._active_positions(tick.symbol)
         bypass_cooldown = False
@@ -197,9 +233,13 @@ class SignalManager:
                 )
                 self._mark_rejected(tick, consensus, "duplicate_active", notes, self._empty_breakdown(base_confidence))
                 return None
-            # Opposite side detected: close existing if new confidence is materially stronger, else ignore.
-            if float(consensus.confidence) >= float(existing.confidence) + 5.0:
-                latest_price = self._current_option_ltp(tick, existing.option_symbol) or existing.entry_price
+            # Opposite side detected. Hard intrabar override always replaces.
+            if hard_intrabar or float(consensus.confidence) >= float(existing.confidence) + 5.0:
+                latest_price = self._current_option_ltp(
+                    tick=tick,
+                    option_symbol=existing.option_symbol,
+                    option_token=existing.option_token,
+                ) or existing.entry_price
                 self._close_signal(
                     existing,
                     status=SignalStatus.CLOSED,
@@ -239,6 +279,8 @@ class SignalManager:
         last_side = self.last_signal_side.get(tick.symbol)
         last_conf = self.last_signal_confidence.get(tick.symbol, 0.0)
         if (
+            (not hard_intrabar)
+            and
             last_side
             and last_side != consensus.signal
             and self._recent_signal(tick.symbol, seconds=self.flip_flop_seconds)
@@ -247,52 +289,61 @@ class SignalManager:
             self._mark_rejected(tick, consensus, "flip_flop_guard", notes, self._empty_breakdown(base_confidence))
             return None
 
-        option_symbol, option_ltp, option_ts = self._select_option_contract(tick, consensus)
-        if option_symbol is None or option_ltp is None:
+        contract = self._select_option_contract(tick, consensus)
+        if contract is None:
             self._mark_rejected(tick, consensus, "option_contract_unavailable", notes, self._empty_breakdown(base_confidence))
             return None
-        if not (self.premium_min <= float(option_ltp) <= self.premium_max):
-            notes.append(f"premium_out_of_range:{round(float(option_ltp),2)}")
-            self._mark_rejected(tick, consensus, "premium_filter_blocked", notes, self._empty_breakdown(base_confidence))
-            return None
-        now_ts = (tick.received_at if isinstance(tick.received_at, datetime) else datetime.now(timezone.utc)).timestamp()
-        opt_ts = float(option_ts or 0.0)
-        option_latency_ms = max(0.0, (now_ts - opt_ts) * 1000.0) if opt_ts > 0 else 1e9
-        if self.metrics is not None:
-            self.metrics.record_option_data_latency(option_latency_ms)
-        stale_limit_ms = max(500.0, float(getattr(settings, "option_data_stale_sec", 1.0)) * 1000.0)
-        if option_latency_ms > stale_limit_ms:
-            self.logger.warning(
-                "Signal rejected due to stale option data symbol=%s option=%s option_latency_ms=%.2f limit_ms=%.2f",
-                tick.symbol,
-                option_symbol,
-                option_latency_ms,
-                stale_limit_ms,
+        option_symbol = str(contract.get("option_symbol") or "")
+        option_ltp = float(contract.get("ltp") or 0.0)
+        option_ts = contract.get("option_timestamp")
+        option_expiry = str(contract.get("expiry") or "")
+        option_type = str(contract.get("option_type") or "")
+        option_token = str(contract.get("token") or "")
+        opt_momentum: Dict[str, float | bool] = {"option_momentum_confirmed": True, "momentum_strength": 0.0}
+        if (not hard_intrabar) and (not execution_only):
+            if not (self.premium_min <= float(option_ltp) <= self.premium_max):
+                notes.append(f"premium_out_of_range:{round(float(option_ltp),2)}")
+                self._mark_rejected(tick, consensus, "premium_filter_blocked", notes, self._empty_breakdown(base_confidence))
+                return None
+            now_ts = (tick.received_at if isinstance(tick.received_at, datetime) else datetime.now(timezone.utc)).timestamp()
+            opt_ts = float(option_ts or 0.0)
+            option_latency_ms = max(0.0, (now_ts - opt_ts) * 1000.0) if opt_ts > 0 else 1e9
+            if self.metrics is not None:
+                self.metrics.record_option_data_latency(option_latency_ms)
+            stale_limit_ms = max(500.0, float(getattr(settings, "option_data_stale_sec", 1.0)) * 1000.0)
+            if option_latency_ms > stale_limit_ms:
+                self.logger.warning(
+                    "Signal rejected due to stale option data symbol=%s option=%s option_latency_ms=%.2f limit_ms=%.2f",
+                    tick.symbol,
+                    option_symbol,
+                    option_latency_ms,
+                    stale_limit_ms,
+                )
+                self._mark_rejected(tick, consensus, "stale_option_data", notes, self._empty_breakdown(base_confidence))
+                return None
+            opt_momentum = self.option_momentum.evaluate(
+                tick=tick,
+                option_symbol=option_symbol,
+                option_ltp=float(option_ltp),
+                signal=consensus.signal,
             )
-            self._mark_rejected(tick, consensus, "stale_option_data", notes, self._empty_breakdown(base_confidence))
-            return None
-        opt_momentum = self.option_momentum.evaluate(
-            tick=tick,
-            option_symbol=option_symbol,
-            option_ltp=float(option_ltp),
-            signal=consensus.signal,
-        )
-        if not bool(opt_momentum.get("option_momentum_confirmed", False)):
-            momentum_adjustment -= 5.0 if primary_trigger else 7.0
-            notes.append("option_momentum_penalty")
+            if not bool(opt_momentum.get("option_momentum_confirmed", False)):
+                momentum_adjustment -= 5.0 if primary_trigger else 7.0
+                notes.append("option_momentum_penalty")
 
-        if lead_engine == "intrabar_engine":
-            now = datetime.now(timezone.utc)
-            last_fire = self._last_intrabar_fire_at.get(tick.symbol)
-            if last_fire and (now - last_fire).total_seconds() < 30.0:
-                momentum_adjustment -= 7.0
-                notes.append("intrabar_refire_penalty")
-            self._last_intrabar_fire_at[tick.symbol] = now
+            if lead_engine == "intrabar_engine":
+                now = datetime.now(timezone.utc)
+                last_fire = self._last_intrabar_fire_at.get(tick.symbol)
+                if last_fire and (now - last_fire).total_seconds() < 30.0:
+                    momentum_adjustment -= 7.0
+                    notes.append("intrabar_refire_penalty")
+                self._last_intrabar_fire_at[tick.symbol] = now
 
-        dead_zone_penalty = self._dead_zone_penalty(tick)
-        if dead_zone_penalty < 0:
-            notes.append("dead_zone_penalty")
+            dead_zone_penalty = self._dead_zone_penalty(tick)
+            if dead_zone_penalty < 0:
+                notes.append("dead_zone_penalty")
 
+        total_boost = min(20.0, primary_boost + directional_boost + vwap_boost + regime_boost)
         final_confidence = base_confidence + total_boost + momentum_adjustment + dead_zone_penalty
         final_confidence = max(0.0, min(100.0, final_confidence))
         consensus.confidence = round(final_confidence, 2)
@@ -309,15 +360,16 @@ class SignalManager:
         )
         self.last_confidence_breakdown[tick.symbol] = breakdown
 
-        if float(consensus.confidence) < 25.0 and (not primary_trigger):
-            self._mark_rejected(tick, consensus, "low_final_confidence_no_primary", notes, breakdown)
-            return None
-        if lead_engine == "zero_hero_engine" and float(consensus.confidence) < 80.0:
-            self._mark_rejected(tick, consensus, "zero_hero_needs_high_confidence", notes, breakdown)
-            return None
-        if (not primary_trigger) and float(consensus.confidence) < 25.0 and directional_strength < 0.7:
-            self._mark_rejected(tick, consensus, "no_primary_or_strong_base", notes, breakdown)
-            return None
+        if (not hard_intrabar) and (not execution_only):
+            if float(consensus.confidence) < 25.0 and (not primary_trigger):
+                self._mark_rejected(tick, consensus, "low_final_confidence_no_primary", notes, breakdown)
+                return None
+            if lead_engine == "zero_hero_engine" and float(consensus.confidence) < 80.0:
+                self._mark_rejected(tick, consensus, "zero_hero_needs_high_confidence", notes, breakdown)
+                return None
+            if (not primary_trigger) and float(consensus.confidence) < 25.0 and directional_strength < 0.7:
+                self._mark_rejected(tick, consensus, "no_primary_or_strong_base", notes, breakdown)
+                return None
         # Momentum remains a soft penalty; no hard reject by momentum alone.
 
         t1 = round(float(option_ltp) * 1.20, 2)
@@ -327,21 +379,22 @@ class SignalManager:
         strategy = self._strategy_name(lead_engine)
         sl_ratio = self._premium_stop_ratio(strategy)
         stop_loss = round(float(option_ltp) * (1.0 - sl_ratio), 2)
-        entry_filter_ok, entry_filter_notes = self._run_entry_filter(
-            tick=tick,
-            signal=consensus.signal,
-            option_ltp=float(option_ltp),
-            stop_loss=float(stop_loss),
-            target_price=float(t2),
-            option_momentum_confirmed=bool(opt_momentum.get("option_momentum_confirmed", False)),
-        )
-        if not entry_filter_ok:
-            notes.extend(entry_filter_notes)
-            self._mark_rejected(tick, consensus, "entry_filter_failed", notes, breakdown)
-            return None
+        if (not hard_intrabar) and (not execution_only):
+            entry_filter_ok, entry_filter_notes = self._run_entry_filter(
+                tick=tick,
+                signal=consensus.signal,
+                option_ltp=float(option_ltp),
+                stop_loss=float(stop_loss),
+                target_price=float(t2),
+                option_momentum_confirmed=bool(opt_momentum.get("option_momentum_confirmed", False)),
+            )
+            if not entry_filter_ok:
+                notes.extend(entry_filter_notes)
+                self._mark_rejected(tick, consensus, "entry_filter_failed", notes, breakdown)
+                return None
         strength = max([float(row.strength) for row in consensus.engine_outputs if row.signal == consensus.signal] or [0.0])
         reason = next((str(row.reason or "") for row in consensus.engine_outputs if row.engine == lead_engine), "")
-        expiry = self._expiry_from_option_symbol(option_symbol)
+        expiry = option_expiry or self._expiry_from_option_symbol(option_symbol)
         signal_tag = self._signal_tag(lead_engine)
         now = datetime.now(timezone.utc)
         signal = SignalRecord(
@@ -366,6 +419,8 @@ class SignalManager:
             target_price=t2,
             option_symbol=option_symbol,
             strike=self._strike_from_option_symbol(option_symbol),
+            option_type=option_type or (option_symbol.split("_")[-1] if "_" in option_symbol else None),
+            option_token=(option_token or None),
             reason=reason,
             exit_price=None,
             stop_reference_index=stop_reference_index,
@@ -424,6 +479,9 @@ class SignalManager:
                 self.notifier.notify_signal_created(signal, lead_engine=lead_engine)
             except Exception:
                 self.logger.exception("Telegram notify create failed")
+        if self.metrics is not None:
+            self.metrics.record_signal_generated()
+            self.metrics.record_signal_executed()
         self.last_decision_note[tick.symbol] = f"allowed:{'|'.join(notes)}"
         return signal
 
@@ -431,7 +489,11 @@ class SignalManager:
         for signal in self._active_positions(tick.symbol):
             now = datetime.now(timezone.utc)
             recovery_inactive = self._is_recovery_inactive(signal, now=now)
-            latest_price = self._current_option_ltp(tick, signal.option_symbol)
+            latest_price = self._current_option_ltp(
+                tick=tick,
+                option_symbol=signal.option_symbol,
+                option_token=signal.option_token,
+            )
             if latest_price is None:
                 if recovery_inactive:
                     signal.lifecycle_events.append(
@@ -595,60 +657,75 @@ class SignalManager:
                 )
         self._persist_storage_if_due()
 
-    def _select_option_contract(self, tick: MarketTick, consensus: ConsensusOutput) -> Tuple[Optional[str], Optional[float], Optional[float]]:
+    def _select_option_contract(self, tick: MarketTick, consensus: ConsensusOutput) -> Optional[Dict[str, Any]]:
         direction = consensus.signal
-        strikes = sorted(float(k) for k in tick.option_chain.keys()) if tick.option_chain else []
+        if direction not in {"BUY_CE", "BUY_PE"}:
+            return None
+        all_expiries = sorted((tick.option_chain or {}).keys())
+        if not all_expiries:
+            return None
+        today_ymd = datetime.now(timezone.utc).strftime("%Y%m%d")
+        valid_expiries = [e for e in all_expiries if str(e) >= today_ymd]
+        if not valid_expiries:
+            return None
+        expiry = valid_expiries[0]
+        by_strike = (tick.option_chain or {}).get(expiry) or {}
+        strikes = sorted(float(k) for k in by_strike.keys())
         if not strikes:
-            return None, None, None
+            return None
         atm = min(strikes, key=lambda s: abs(s - tick.index_price))
         lead_engine = self._lead_engine(consensus)
         strike_value = self._strategy_strike(atm, direction, lead_engine)
         strike = min(strikes, key=lambda s: abs(s - strike_value))
         leg = "CE" if direction == "BUY_CE" else "PE"
-        row = tick.option_chain.get(str(int(strike))) or tick.option_chain.get(str(strike))
+        row = by_strike.get(str(int(strike))) or by_strike.get(str(strike))
         if not row:
-            return None, None, None
-        ltp = row.get(leg, {}).get("ltp")
+            return None
+        leg_row = row.get(leg, {}) or {}
+        ltp = leg_row.get("ltp")
         if ltp is None:
-            return None, None, None
-        option_ts = row.get(leg, {}).get("option_timestamp")
-
-        leg_expiry_raw = str((row.get(leg) or {}).get("expiry") or "").strip().upper()
-        if tick.symbol == "SENSEX":
-            expected_expiry = self.expiry_engine.nearest_expiry("SENSEX")
-            if not leg_expiry_raw:
-                return None, None, None
-            try:
-                leg_expiry_date = datetime.strptime(leg_expiry_raw, "%d%b%Y").date()
-            except ValueError:
-                return None, None, None
-            if leg_expiry_date != expected_expiry:
-                return None, None, None
-        if leg_expiry_raw:
-            try:
-                expiry = datetime.strptime(leg_expiry_raw, "%d%b%Y").strftime("%Y%m%d")
-            except ValueError:
-                expiry = self.expiry_engine.nearest_expiry(tick.symbol).strftime("%Y%m%d")
-        else:
-            expiry = self.expiry_engine.nearest_expiry(tick.symbol).strftime("%Y%m%d")
+            return None
+        option_ts = leg_row.get("option_timestamp")
+        if self._is_expired_expiry(expiry):
+            return None
         option_symbol = f"{tick.symbol}_{expiry}_{int(strike)}_{leg}"
         try:
             ts_float = float(option_ts) if option_ts is not None else None
         except (TypeError, ValueError):
             ts_float = None
-        return option_symbol, float(ltp), ts_float
+        return {
+            "option_symbol": option_symbol,
+            "ltp": float(ltp),
+            "option_timestamp": ts_float,
+            "expiry": expiry,
+            "strike": str(int(strike)),
+            "option_type": leg,
+            "token": str(leg_row.get("token") or ""),
+        }
 
-    @staticmethod
-    def _current_option_ltp(tick: MarketTick, option_symbol: str) -> Optional[float]:
+    def _current_option_ltp(self, tick: MarketTick, option_symbol: str, option_token: Optional[str] = None) -> Optional[float]:
         parts = option_symbol.split("_")
         if len(parts) < 4:
             return None
+        expiry = parts[1]
         strike = parts[2]
         leg = parts[3]
-        row = tick.option_chain.get(strike)
+        row = ((tick.option_chain or {}).get(expiry) or {}).get(strike)
         if not row:
             return None
-        price = row.get(leg, {}).get("ltp")
+        leg_row = row.get(leg, {}) or {}
+        if option_token:
+            tick_token = str(leg_row.get("token") or "")
+            if tick_token and tick_token != str(option_token):
+                self.logger.error(
+                    "CONTRACT MISMATCH symbol=%s expected_token=%s got_token=%s option=%s",
+                    tick.symbol,
+                    option_token,
+                    tick_token,
+                    option_symbol,
+                )
+                return None
+        price = leg_row.get("ltp")
         return None if price is None else float(price)
 
     def _strategy_strike(self, atm: float, direction: str, lead_engine: str) -> float:
@@ -694,6 +771,14 @@ class SignalManager:
         return parts[1] if len(parts) > 1 else ""
 
     @staticmethod
+    def _is_expired_expiry(expiry_ymd: str) -> bool:
+        try:
+            exp = datetime.strptime(str(expiry_ymd), "%Y%m%d").date()
+        except ValueError:
+            return True
+        return exp < datetime.now(timezone.utc).date()
+
+    @staticmethod
     def _strike_from_option_symbol(option_symbol: str) -> Optional[float]:
         try:
             return float(option_symbol.split("_")[2])
@@ -702,10 +787,31 @@ class SignalManager:
 
     @staticmethod
     def _lead_engine(consensus: ConsensusOutput) -> str:
+        sig = str(consensus.signal or "")
+        if sig in ("BUY_CE", "BUY_PE"):
+            strong_ib = [
+                row
+                for row in consensus.engine_outputs
+                if row.engine == "intrabar_engine"
+                and row.signal == sig
+                and float(row.strength or 0.0) >= 0.7
+            ]
+            if strong_ib:
+                return "intrabar_engine"
+            aligned = [row for row in consensus.engine_outputs if row.signal == sig]
+            if aligned:
+                return max(aligned, key=lambda row: float(row.strength or 0.0)).engine
         candidates = [row for row in consensus.engine_outputs if row.signal != "NONE"]
         if not candidates:
             return "scalping_engine"
-        return max(candidates, key=lambda row: row.strength).engine
+        return max(candidates, key=lambda row: float(row.strength or 0.0)).engine
+
+    @staticmethod
+    def _is_hard_intrabar_override(consensus: ConsensusOutput) -> bool:
+        for row in consensus.engine_outputs:
+            if row.engine == "intrabar_engine" and row.signal != "NONE" and float(row.strength or 0.0) >= 0.7:
+                return True
+        return False
 
     def _active_positions(self, symbol: str) -> List[SignalRecord]:
         return [
@@ -904,7 +1010,7 @@ class SignalManager:
         for row in raw.get("paper_signals", []):
             if isinstance(row, dict) and str(row.get("symbol") or "") in self.enabled_symbols:
                 self.paper_signals.append(row)
-                key = f"{row.get('symbol')}|{row.get('engine')}"
+                key = f"{row.get('symbol')}|{row.get('engine')}|{row.get('option_symbol')}"
                 status = str(row.get("status") or "").upper()
                 if status == "PAPER_OPEN":
                     self._paper_positions[key] = dict(row)
@@ -1024,24 +1130,30 @@ class SignalManager:
                 continue
             signal = str(getattr(row, "signal", "NONE") or "NONE")
             strategy = self._strategy_name(engine_name)
-            option_symbol, option_ltp = self._paper_option_contract_preview(
+            contract = self._paper_option_contract_preview(
                 tick=tick,
                 signal=signal,
                 lead_engine=engine_name,
             )
+            if contract is None:
+                continue
+            option_symbol = str(contract.get("option_symbol") or "")
+            option_ltp = float(contract.get("ltp") or 0.0)
+            option_type = str(contract.get("option_type") or "")
+            option_token = str(contract.get("token") or "")
             strike = self._strike_from_option_symbol(option_symbol) if option_symbol else None
             expiry = self._expiry_from_option_symbol(option_symbol) if option_symbol else ""
             qty = self._execution_quantity_for_symbol(tick.symbol)
             current_ltp: Optional[float] = None
             paper_target: Optional[float] = None
             paper_exit: Optional[float] = None
-            if option_symbol is not None and option_ltp is not None:
+            if option_symbol and option_ltp is not None:
                 current_ltp = round(float(option_ltp), 2)
                 paper_target = round(float(option_ltp) * 1.20, 2)
                 paper_exit = round(float(option_ltp), 2)
-            if option_symbol is None or option_ltp is None:
+            if (not option_symbol) or option_ltp is None:
                 continue
-            position_key = f"{tick.symbol}|{engine_name}"
+            position_key = f"{tick.symbol}|{engine_name}|{option_symbol}"
             existing = self._paper_positions.get(position_key)
             if existing and str(existing.get("signal") or "") == signal:
                 existing["current_ltp"] = current_ltp
@@ -1049,8 +1161,8 @@ class SignalManager:
                 existing["paper_exit"] = paper_exit
                 move = (
                     float(current_ltp) - float(existing.get("entry_price") or 0.0)
-                    if signal == "BUY_CE"
-                    else float(existing.get("entry_price") or 0.0) - float(current_ltp)
+                    if signal in {"BUY_CE", "BUY_PE"}
+                    else 0.0
                 )
                 existing["simulated_pnl"] = round(move * float(existing.get("qty") or qty), 2)
                 existing["status"] = "PAPER_OPEN"
@@ -1061,8 +1173,8 @@ class SignalManager:
                 prev_side = str(existing.get("signal") or "")
                 move = (
                     exit_ltp - float(existing.get("entry_price") or 0.0)
-                    if prev_side == "BUY_CE"
-                    else float(existing.get("entry_price") or 0.0) - exit_ltp
+                    if prev_side in {"BUY_CE", "BUY_PE"}
+                    else 0.0
                 )
                 closed = dict(existing)
                 closed["timestamp"] = now
@@ -1088,6 +1200,8 @@ class SignalManager:
                 "option_symbol": option_symbol,
                 "expiry": expiry,
                 "option_ltp": round(float(option_ltp), 2),
+                "option_type": option_type,
+                "option_token": option_token,
                 "qty": float(qty),
                 "status": "PAPER_OPEN",
                 "entry_price": round(float(option_ltp), 2),
@@ -1107,32 +1221,43 @@ class SignalManager:
         tick: MarketTick,
         signal: str,
         lead_engine: str,
-    ) -> tuple[Optional[str], Optional[float]]:
+    ) -> Optional[Dict[str, Any]]:
         if signal not in {"BUY_CE", "BUY_PE"}:
-            return None, None
-        strikes = sorted(float(k) for k in tick.option_chain.keys()) if tick.option_chain else []
+            return None
+        all_expiries = sorted((tick.option_chain or {}).keys())
+        if not all_expiries:
+            return None
+        today_ymd = datetime.now(timezone.utc).strftime("%Y%m%d")
+        valid_expiries = [e for e in all_expiries if str(e) >= today_ymd]
+        if not valid_expiries:
+            return None
+        expiry = valid_expiries[0]
+        by_strike = (tick.option_chain or {}).get(expiry) or {}
+        strikes = sorted(float(k) for k in by_strike.keys())
         if not strikes:
-            return None, None
+            return None
         atm = min(strikes, key=lambda s: abs(s - float(tick.index_price)))
         strike_value = self._strategy_strike(atm, signal, lead_engine)
         strike = min(strikes, key=lambda s: abs(s - strike_value))
         leg = "CE" if signal == "BUY_CE" else "PE"
-        row = tick.option_chain.get(str(int(strike))) or tick.option_chain.get(str(strike))
+        row = by_strike.get(str(int(strike))) or by_strike.get(str(strike))
         if not row:
-            return None, None
-        ltp = row.get(leg, {}).get("ltp")
+            return None
+        leg_row = row.get(leg, {}) or {}
+        ltp = leg_row.get("ltp")
         if ltp is None:
-            return None, None
-        leg_expiry_raw = str((row.get(leg) or {}).get("expiry") or "").strip().upper()
-        if leg_expiry_raw:
-            try:
-                expiry = datetime.strptime(leg_expiry_raw, "%d%b%Y").strftime("%Y%m%d")
-            except ValueError:
-                expiry = self.expiry_engine.nearest_expiry(tick.symbol).strftime("%Y%m%d")
-        else:
-            expiry = self.expiry_engine.nearest_expiry(tick.symbol).strftime("%Y%m%d")
+            return None
+        if self._is_expired_expiry(expiry):
+            return None
         option_symbol = f"{tick.symbol}_{expiry}_{int(strike)}_{leg}"
-        return option_symbol, float(ltp)
+        return {
+            "option_symbol": option_symbol,
+            "ltp": float(ltp),
+            "expiry": expiry,
+            "strike": str(int(strike)),
+            "option_type": leg,
+            "token": str(leg_row.get("token") or ""),
+        }
 
     def _execution_quantity_for_symbol(self, symbol: str) -> float:
         sym = str(symbol or "").upper()
@@ -1164,8 +1289,6 @@ class SignalManager:
 
     @staticmethod
     def _signed_move(signal: SignalRecord, current_price: float) -> float:
-        if signal.signal == "BUY_PE":
-            return signal.entry_price - current_price
         return current_price - signal.entry_price
 
     def _mark_rejected(
@@ -1192,6 +1315,8 @@ class SignalManager:
         }
         self.rejected_signals.append(payload)
         self.rejected_signals = self.rejected_signals[-self.max_history_records :]
+        if self.metrics is not None:
+            self.metrics.record_signal_rejected(reason)
         self.last_decision_note[tick.symbol] = f"blocked:{reason}:{'|'.join(note_rows)}"
         self.logger.debug(
             "SIGNAL REJECTED symbol=%s signal=%s base=%.2f penalties=%.2f final=%.2f reason=%s notes=%s breakdown=%s",
@@ -1212,6 +1337,32 @@ class SignalManager:
             conf_breakdown,
             "|".join(note_rows),
         )
+        self._persist_storage_if_due()
+
+    def record_rejected_event(
+        self,
+        *,
+        symbol: str,
+        reason: str,
+        signal: str = "NONE",
+        confidence: float = 0.0,
+        notes: Optional[List[str]] = None,
+    ) -> None:
+        now = datetime.now(timezone.utc)
+        payload = {
+            "timestamp": now.isoformat(),
+            "symbol": symbol,
+            "signal": signal,
+            "confidence": float(confidence),
+            "reason": str(reason),
+            "notes": list(notes or []),
+            "confidence_breakdown": self._empty_breakdown(float(confidence)),
+        }
+        self.rejected_signals.append(payload)
+        self.rejected_signals = self.rejected_signals[-self.max_history_records :]
+        if self.metrics is not None:
+            self.metrics.record_signal_rejected(reason)
+        self.last_decision_note[symbol] = f"blocked:{reason}:{'|'.join(payload['notes'])}"
         self._persist_storage_if_due()
 
     def _is_recovery_inactive(self, signal: SignalRecord, *, now: datetime) -> bool:

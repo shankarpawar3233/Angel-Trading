@@ -108,7 +108,16 @@ class OSIPipeline:
         self.telegram_notifier.close()
 
     async def on_tick(self, tick: MarketTick) -> None:
+        self.metrics.record_tick_received()
         if tick.symbol not in self.signal_manager.enabled_symbols:
+            self.metrics.record_tick_dropped()
+            self.signal_manager.record_rejected_event(
+                symbol=str(tick.symbol),
+                signal="NONE",
+                confidence=0.0,
+                reason="symbol_disabled",
+                notes=[f"enabled_symbols={','.join(self.signal_manager.enabled_symbols)}"],
+            )
             return
         await self.tick_queue.put(tick)
 
@@ -168,6 +177,17 @@ class OSIPipeline:
             if isinstance(intrabar_ts, datetime) and (datetime.now(timezone.utc) - intrabar_ts).total_seconds() <= 5:
                 outputs.append(cached_intrabar["output"])
         for engine in self.engines:
+            if isinstance(engine, MeanReversionEngine) and str(regime).upper() == "TRENDING":
+                outputs.append(
+                    EngineOutput(
+                        engine="mean_reversion_engine",
+                        signal="NONE",
+                        strength=0.0,
+                        confidence=0.0,
+                        reason="mean_reversion_disabled_trending_regime",
+                    )
+                )
+                continue
             t0 = time.perf_counter()
             out = engine.evaluate(tick, self.engine_state)
             elapsed_ms = (time.perf_counter() - t0) * 1000.0
@@ -188,10 +208,28 @@ class OSIPipeline:
         self._latest_strategy_signals[tick.symbol] = strategy_signals
 
         self.signal_manager.record_engine_signals(tick, outputs, source=f"candle_{candle.timeframe}")
-        # Regime is advisory only; engines are no longer hard-blocked by regime.
-        consensus = self.consensus.combine(outputs, regime=regime)
-        sb_row = next((r for r in outputs if r.engine == "smart_breakout_engine"), None)
+        # Deterministic decision layer:
+        # zero_hero > strong intrabar >=0.7 > smart_breakout > NONE
         ib_row = next((r for r in outputs if r.engine == "intrabar_engine"), None)
+        if ib_row is not None and ib_row.signal != "NONE" and float(ib_row.strength or 0.0) >= 0.7:
+            consensus = ConsensusOutput(
+                signal=ib_row.signal,
+                confidence=float(
+                    ib_row.confidence if ib_row.confidence is not None else max(50.0, float(ib_row.strength or 0.0) * 100.0)
+                ),
+                weighted_score=float(ib_row.strength or 0.0),
+                engine_outputs=[ib_row],
+            )
+        else:
+            consensus = self.consensus.combine(outputs, regime=regime)
+        logger.info(
+            "SIGNAL FLOW symbol=%s engines=%s decision=%s conf=%.2f",
+            tick.symbol,
+            ",".join(f"{o.engine}:{o.signal}:{float(o.strength or 0.0):.3f}" for o in outputs),
+            consensus.signal,
+            float(consensus.confidence or 0.0),
+        )
+        sb_row = next((r for r in outputs if r.engine == "smart_breakout_engine"), None)
         last_intrabar_ts = self._last_intrabar_trigger_ts.get(tick.symbol)
         if (
             sb_row is not None
@@ -203,17 +241,16 @@ class OSIPipeline:
             sb_row.strength = round(max(0.0, float(sb_row.strength) * 0.7), 3)
             sb_row.confidence = round(max(0.0, float(sb_row.confidence or 0.0) - 10.0), 2)
             sb_row.reason = f"{sb_row.reason or ''}|overlap_dampened".strip("|")
-        if sb_row and float(sb_row.confidence or 0.0) >= 65.0 and sb_row.signal != "NONE":
-            consensus.signal = sb_row.signal
-            consensus.confidence = max(float(consensus.confidence), float(sb_row.confidence or 0.0))
-            consensus.weighted_score = float(sb_row.strength)
-        if ib_row and float(ib_row.confidence or 0.0) >= 60.0 and ib_row.signal != "NONE":
-            consensus.signal = ib_row.signal
-            consensus.confidence = max(float(consensus.confidence), float(ib_row.confidence or 0.0))
-            consensus.weighted_score = float(ib_row.strength)
         self.metrics.record_confidence(consensus.confidence)
 
         signal = self.signal_manager.process_consensus(tick, consensus)
+        logger.info(
+            "SIGNAL FLOW RESULT symbol=%s decision=%s executed=%s signal_id=%s",
+            tick.symbol,
+            consensus.signal,
+            "yes" if signal is not None else "no",
+            (signal.signal_id if signal is not None else "-"),
+        )
         self._append_decision(tick, consensus, signal)
         if signal is not None:
             await self._persist_signal(signal)
@@ -269,6 +306,13 @@ class OSIPipeline:
         live_candle = self.candle_builder.get_live_candle(tick.symbol, "1m")
         prev_candle = self.candle_builder.get_last_closed(tick.symbol, "1m")
         if not live_candle or not prev_candle:
+            self.signal_manager.record_rejected_event(
+                symbol=tick.symbol,
+                reason="intrabar_context_missing",
+                signal="NONE",
+                confidence=0.0,
+                notes=["live_or_prev_candle_missing"],
+            )
             return None
         live_candle_json = dict(live_candle)
         for k in ("start", "end"):
@@ -300,6 +344,13 @@ class OSIPipeline:
         intrabar = self.intrabar_engine.evaluate(intrabar_tick, self.engine_state)
         self.metrics.record_engine_latency(intrabar.engine, (time.perf_counter() - t0) * 1000.0)
         if intrabar.signal == "NONE":
+            self.signal_manager.record_rejected_event(
+                symbol=tick.symbol,
+                reason="intrabar_no_signal",
+                signal="NONE",
+                confidence=float(intrabar.confidence or 0.0),
+                notes=[f"strength={float(intrabar.strength or 0.0):.3f}"],
+            )
             return None
         self.signal_manager.record_engine_signals(intrabar_tick, [intrabar], source="intrabar")
         intrabar_strategy = self._build_strategy_signals(
@@ -311,7 +362,66 @@ class OSIPipeline:
         merged = [row for row in existing if row.get("engine") != intrabar.engine]
         merged.extend(intrabar_strategy)
         self._latest_strategy_signals[tick.symbol] = merged[-20:]
+        strong_ib = float(intrabar.strength or 0.0) >= 0.7
+        if strong_ib:
+            self._pending_intrabar.pop(tick.symbol, None)
+            now = datetime.now(timezone.utc)
+            confidence = max(
+                float(settings.intrabar_confidence_floor),
+                float(intrabar.confidence or 0.0),
+                round(float(intrabar.strength or 0.0) * 100.0, 2),
+            )
+            consensus = ConsensusOutput(
+                signal=intrabar.signal,
+                confidence=float(confidence),
+                weighted_score=round(float(intrabar.strength or 0.0), 4),
+                engine_outputs=[intrabar],
+            )
+            self.metrics.record_confidence(consensus.confidence)
+            signal = self.signal_manager.process_consensus(intrabar_tick, consensus)
+            self._append_decision(intrabar_tick, consensus, signal)
+            self._latest_intrabar_output[tick.symbol] = {"ts": now, "output": intrabar}
+            self._last_intrabar_trigger_ts[tick.symbol] = now
+            if signal is not None:
+                await self._persist_signal(signal)
+            payload = {
+                "symbol": intrabar_tick.symbol,
+                "index_price": intrabar_tick.index_price,
+                "timestamp": intrabar_tick.timestamp.isoformat(),
+                "candle": {"timeframe": "intrabar", **live_candle_json},
+                "regime": intrabar_tick.meta.get("regime"),
+                "engine_outputs": [intrabar.model_dump()],
+                "strategy_signals": list(self._latest_strategy_signals.get(tick.symbol) or []),
+                "consensus": consensus.model_dump(),
+                "pending_signal": None,
+                "active_signal": signal.model_dump() if signal else None,
+                "cards": [card.model_dump(mode="json") for card in self.signal_manager.active_cards()],
+                "active_signals": self.signal_manager.snapshot_active_signals(),
+                "history": self.signal_manager.snapshot_history(),
+                "rejected_signals": self.signal_manager.snapshot_rejected(),
+                "paper_signals": self.signal_manager.snapshot_paper_signals()[-50:],
+                "decision_note": self.signal_manager.latest_decision_note(intrabar_tick.symbol),
+                "confidence_breakdown": self.signal_manager.latest_confidence_breakdown(intrabar_tick.symbol),
+                "entry_mode": "intrabar_direct_execution",
+                "market_indices": self.snapshot_market_indices(),
+            }
+            await self.redis_store.set_json(f"osi:live:{tick.symbol}", payload)
+            self._last_live_snapshot[tick.symbol] = payload
+            await self.postgres_repo.store_engine_snapshot(
+                snapshot_id=f"ENG-{uuid4().hex[:12]}",
+                symbol=tick.symbol,
+                ts=datetime.now(timezone.utc),
+                payload=payload,
+            )
+            return payload
+
         if tick.symbol in self._pending_intrabar:
+            self.signal_manager.record_rejected_event(
+                symbol=tick.symbol,
+                reason="intrabar_pending_already_exists",
+                signal=str(intrabar.signal),
+                confidence=float(intrabar.confidence or 0.0),
+            )
             return None
         created_at = datetime.now(timezone.utc)
         self._pending_intrabar[tick.symbol] = {
@@ -360,11 +470,29 @@ class OSIPipeline:
         live_candle = self.candle_builder.get_live_candle(tick.symbol, "1m")
         prev_candle = self.candle_builder.get_last_closed(tick.symbol, "1m")
         if not live_candle or not prev_candle:
+            self.signal_manager.record_rejected_event(
+                symbol=str(tick.symbol),
+                reason="intrabar_confirmation_context_missing",
+                signal=str(getattr(pending.get("output"), "signal", "NONE")),
+                confidence=float(getattr(pending.get("output"), "confidence", 0.0) or 0.0),
+            )
             return None
         now = datetime.now(timezone.utc)
         if now < pending["activate_after"]:
             return None
         if now > pending["expires_at"]:
+            pending_output = pending.get("output")
+            pending_signal = str(getattr(pending_output, "signal", "NONE"))
+            pending_conf = float(getattr(pending_output, "confidence", 0.0) or 0.0)
+            pending_trigger = float(pending.get("trigger_price") or 0.0)
+            pending_vwap = float(pending.get("vwap") or 0.0)
+            self.signal_manager.record_rejected_event(
+                symbol=str(tick.symbol),
+                signal=pending_signal,
+                confidence=pending_conf,
+                reason="intrabar_pending_expired",
+                notes=[f"trigger_price={pending_trigger:.2f}", f"vwap={pending_vwap:.2f}"],
+            )
             del self._pending_intrabar[tick.symbol]
             return None
 
@@ -380,6 +508,18 @@ class OSIPipeline:
         else:
             confirmed = ltp_now <= trigger_price and ltp_now < vwap and momentum < 0
         if not confirmed:
+            self.signal_manager.record_rejected_event(
+                symbol=str(tick.symbol),
+                signal=str(output.signal),
+                confidence=float(output.confidence or 0.0),
+                reason="intrabar_no_confirmation",
+                notes=[
+                    f"ltp_now={ltp_now:.2f}",
+                    f"trigger_price={trigger_price:.2f}",
+                    f"vwap={vwap:.2f}",
+                    f"momentum={momentum:.3f}",
+                ],
+            )
             return None
 
         del self._pending_intrabar[tick.symbol]
@@ -390,6 +530,13 @@ class OSIPipeline:
             round(output.strength * 100.0, 2),
         )
         if confidence < 50.0:
+            self.signal_manager.record_rejected_event(
+                symbol=str(tick.symbol),
+                signal=str(output.signal),
+                confidence=float(confidence),
+                reason="intrabar_confirmed_low_confidence",
+                notes=["min_required=50.0"],
+            )
             return None
         consensus = ConsensusOutput(
             signal=output.signal,
@@ -458,6 +605,7 @@ class OSIPipeline:
         for sub in self.subscribers:
             if sub.full():
                 dropped += 1
+                self.metrics.record_tick_dropped()
                 continue
             sub.put_nowait(payload)
         if dropped > 0:
@@ -585,11 +733,13 @@ class OSIPipeline:
             if out.signal == "NONE":
                 continue
             confidence = OSIPipeline._normalized_strategy_confidence(out)
-            option_symbol, option_ltp = self.signal_manager._paper_option_contract_preview(
+            contract = self.signal_manager._paper_option_contract_preview(
                 tick=tick,
                 signal=str(out.signal),
                 lead_engine=str(out.engine),
             )
+            option_symbol = str((contract or {}).get("option_symbol") or "")
+            option_ltp = (contract or {}).get("ltp")
             strike = self.signal_manager._strike_from_option_symbol(option_symbol) if option_symbol else None
             entry_price = round(float(option_ltp), 2) if option_ltp is not None else None
             target_price = round(float(entry_price) * 1.20, 2) if entry_price is not None else None
@@ -679,11 +829,14 @@ class OSIPipeline:
     @staticmethod
     def _instant_chain_volume(tick: MarketTick) -> float:
         total = 0.0
-        for row in (tick.option_chain or {}).values():
-            if not isinstance(row, dict):
+        for by_strike in (tick.option_chain or {}).values():
+            if not isinstance(by_strike, dict):
                 continue
-            total += float(((row.get("CE") or {}).get("volume") or 0.0))
-            total += float(((row.get("PE") or {}).get("volume") or 0.0))
+            for row in by_strike.values():
+                if not isinstance(row, dict):
+                    continue
+                total += float(((row.get("CE") or {}).get("volume") or 0.0))
+                total += float(((row.get("PE") or {}).get("volume") or 0.0))
         return total
 
     def _market_tick_from_candle(self, candle: Candle, received_at: datetime, prev_candle: Dict[str, Any] | None) -> MarketTick:

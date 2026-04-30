@@ -77,10 +77,11 @@ class OptionMomentumService:
         parts = option_symbol.split("_")
         if len(parts) < 4:
             return None, None
+        expiry = parts[1]
         strike = parts[2]
         leg = parts[3]
         opposite = "PE" if leg == "CE" else "CE"
-        row = tick.option_chain.get(strike)
+        row = ((tick.option_chain or {}).get(expiry) or {}).get(strike)
         if not row:
             return None, None
         px = (row.get(opposite) or {}).get("ltp")

@@ -71,7 +71,7 @@ def build_router(pipeline: OSIPipeline):
     async def get_metrics() -> Dict:
         data = pipeline.metrics.snapshot()
         data["target_latency_ms"] = 500
-        data["within_latency_budget"] = data["average_latency_ms"] < 500
+        data["within_latency_budget"] = float(data.get("total_signal_latency_ms") or 0.0) < 500.0
         return data
 
     @router.get("/market/indices")

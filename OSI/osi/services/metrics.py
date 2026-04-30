@@ -18,6 +18,24 @@ class MetricsService:
             ((m.average_latency_ms * (m.ticks_processed - 1)) + total_latency_ms) / m.ticks_processed
         )
 
+    def record_tick_received(self) -> None:
+        self.metrics.ticks_received += 1
+
+    def record_tick_dropped(self) -> None:
+        self.metrics.ticks_dropped += 1
+
+    def record_signal_generated(self) -> None:
+        self.metrics.signals_generated += 1
+
+    def record_signal_executed(self) -> None:
+        self.metrics.signals_executed += 1
+
+    def record_signal_rejected(self, reason: str) -> None:
+        m = self.metrics
+        m.signals_rejected += 1
+        key = str(reason or "unknown")
+        m.rejected_by_reason[key] = int(m.rejected_by_reason.get(key, 0)) + 1
+
     def record_latency_breakdown(
         self,
         *,
@@ -91,8 +109,14 @@ class MetricsService:
 
     def snapshot(self) -> Dict:
         return {
+            "ticks_received": self.metrics.ticks_received,
+            "ticks_dropped": self.metrics.ticks_dropped,
             "ticks_processed": self.metrics.ticks_processed,
             "pipeline_errors": self.metrics.pipeline_errors,
+            "signals_generated": self.metrics.signals_generated,
+            "signals_executed": self.metrics.signals_executed,
+            "signals_rejected": self.metrics.signals_rejected,
+            "rejected_by_reason": dict(self.metrics.rejected_by_reason),
             "average_latency_ms": round(self.metrics.average_latency_ms, 3),
             "max_latency_ms": round(self.metrics.max_latency_ms, 3),
             "last_tick_latency_ms": round(self.metrics.last_tick_latency_ms, 3),

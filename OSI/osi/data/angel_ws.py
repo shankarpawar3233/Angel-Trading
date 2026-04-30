@@ -46,7 +46,10 @@ class AngelWebSocketSource:
         }
         self._current_atm: Dict[str, float] = {}
         self._index_prices: Dict[str, float] = {}
-        self._option_chain: Dict[str, Dict[str, Dict[str, Dict[str, float]]]] = {sym: {} for sym in self._enabled_symbols}
+        # symbol -> expiry(YYYYMMDD) -> strike -> leg -> fields
+        self._option_chain: Dict[str, Dict[str, Dict[str, Dict[str, Dict[str, float]]]]] = {
+            sym: {} for sym in self._enabled_symbols
+        }
         self._last_index_emit: Dict[str, float] = {}
         self._raw_tick_count: int = 0
         self._last_tick_log_ts: float = 0.0
@@ -245,14 +248,20 @@ class AngelWebSocketSource:
                 continue
             strike = str(meta["strike"])
             opt_type = str(meta["type"])
+            expiry_key = str(meta.get("expiry_ymd") or "")
+            if not expiry_key:
+                continue
             with self._lock:
                 self._option_chain.setdefault(symbol, {})
-                self._option_chain[symbol].setdefault(strike, {})
-                self._option_chain[symbol][strike][opt_type] = {
+                self._option_chain[symbol].setdefault(expiry_key, {})
+                self._option_chain[symbol][expiry_key].setdefault(strike, {})
+                self._option_chain[symbol][expiry_key][strike][opt_type] = {
                     "ltp": float(ltp),
                     "volume": float(norm.get("volume") or 0.0),
                     "oi": float(norm.get("oi") or 0.0),
-                    "expiry": str(meta.get("expiry") or ""),
+                    "expiry": str(meta.get("expiry_raw") or ""),
+                    "expiry_ymd": expiry_key,
+                    "token": str(token),
                     "option_timestamp": (
                         float(exch_ts.timestamp()) if isinstance(exch_ts, datetime) else float(now)
                     ),
@@ -281,7 +290,7 @@ class AngelWebSocketSource:
                     "Emit skipped symbol=%s index_price=%s chain_strikes=%s",
                     symbol,
                     index_price,
-                    len(chain),
+                    sum(len(v) for v in chain.values()),
                 )
             return
         if isinstance(exch_ts, datetime):
@@ -411,12 +420,18 @@ class AngelWebSocketSource:
                     continue
                 ex = 2 if symbol == "NIFTY" else 4
                 selected[token] = (ex, token)
+                exp_raw = str(expiry or "").upper()
+                exp_ymd = self._expiry_to_yyyymmdd(exp_raw)
+                if not exp_ymd or self._is_expired_expiry(exp_ymd):
+                    continue
                 selected_meta[token] = {
                     "symbol": symbol,
                     "strike": int(self._extract_strike(row)),
                     "type": opt_type,
-                    "expiry": expiry,
-                    "option_symbol": f"{symbol}_{self.expiry_engine.nearest_expiry(symbol).strftime('%Y%m%d')}_{int(self._extract_strike(row))}_{opt_type}",
+                    "expiry_raw": exp_raw,
+                    "expiry_ymd": exp_ymd,
+                    "token": token,
+                    "option_symbol": f"{symbol}_{exp_ymd}_{int(self._extract_strike(row))}_{opt_type}",
                 }
         with self._lock:
             self._option_meta_by_token.update(selected_meta)
@@ -608,34 +623,62 @@ class AngelWebSocketSource:
         return None
 
     @staticmethod
-    def _fresh_option_chain(chain: Dict[str, Dict[str, Dict[str, float]]], now_epoch: float) -> Dict[str, Dict[str, Dict[str, float]]]:
-        out: Dict[str, Dict[str, Dict[str, float]]] = {}
+    def _fresh_option_chain(
+        chain: Dict[str, Dict[str, Dict[str, Dict[str, float]]]], now_epoch: float
+    ) -> Dict[str, Dict[str, Dict[str, Dict[str, float]]]]:
+        out: Dict[str, Dict[str, Dict[str, Dict[str, float]]]] = {}
         stale_sec = float(settings.option_data_stale_sec)
-        for strike, row in (chain or {}).items():
-            ce = (row or {}).get("CE") or {}
-            pe = (row or {}).get("PE") or {}
-            ce_age = now_epoch - float(ce.get("option_timestamp") or 0.0) if ce else 1e9
-            pe_age = now_epoch - float(pe.get("option_timestamp") or 0.0) if pe else 1e9
-            new_row: Dict[str, Dict[str, float]] = {}
-            if ce and ce_age <= stale_sec:
-                new_row["CE"] = {
-                    "ltp": float(ce.get("ltp") or 0.0),
-                    "volume": float(ce.get("volume") or 0.0),
-                    "oi": float(ce.get("oi") or 0.0),
-                    "expiry": str(ce.get("expiry") or ""),
-                    "option_timestamp": float(ce.get("option_timestamp") or 0.0),
-                }
-            if pe and pe_age <= stale_sec:
-                new_row["PE"] = {
-                    "ltp": float(pe.get("ltp") or 0.0),
-                    "volume": float(pe.get("volume") or 0.0),
-                    "oi": float(pe.get("oi") or 0.0),
-                    "expiry": str(pe.get("expiry") or ""),
-                    "option_timestamp": float(pe.get("option_timestamp") or 0.0),
-                }
-            if new_row:
-                out[strike] = new_row
+        for expiry, by_strike in (chain or {}).items():
+            expiry_rows: Dict[str, Dict[str, Dict[str, float]]] = {}
+            for strike, row in (by_strike or {}).items():
+                ce = (row or {}).get("CE") or {}
+                pe = (row or {}).get("PE") or {}
+                ce_age = now_epoch - float(ce.get("option_timestamp") or 0.0) if ce else 1e9
+                pe_age = now_epoch - float(pe.get("option_timestamp") or 0.0) if pe else 1e9
+                new_row: Dict[str, Dict[str, float]] = {}
+                if ce and ce_age <= stale_sec:
+                    new_row["CE"] = {
+                        "ltp": float(ce.get("ltp") or 0.0),
+                        "volume": float(ce.get("volume") or 0.0),
+                        "oi": float(ce.get("oi") or 0.0),
+                        "expiry": str(ce.get("expiry") or ""),
+                        "expiry_ymd": str(ce.get("expiry_ymd") or expiry),
+                        "token": str(ce.get("token") or ""),
+                        "option_timestamp": float(ce.get("option_timestamp") or 0.0),
+                    }
+                if pe and pe_age <= stale_sec:
+                    new_row["PE"] = {
+                        "ltp": float(pe.get("ltp") or 0.0),
+                        "volume": float(pe.get("volume") or 0.0),
+                        "oi": float(pe.get("oi") or 0.0),
+                        "expiry": str(pe.get("expiry") or ""),
+                        "expiry_ymd": str(pe.get("expiry_ymd") or expiry),
+                        "token": str(pe.get("token") or ""),
+                        "option_timestamp": float(pe.get("option_timestamp") or 0.0),
+                    }
+                if new_row:
+                    expiry_rows[strike] = new_row
+            if expiry_rows:
+                out[expiry] = expiry_rows
         return out
+
+    @staticmethod
+    def _expiry_to_yyyymmdd(expiry_raw: str) -> str:
+        txt = str(expiry_raw or "").strip().upper()
+        if not txt:
+            return ""
+        try:
+            return datetime.strptime(txt, "%d%b%Y").strftime("%Y%m%d")
+        except ValueError:
+            return ""
+
+    @staticmethod
+    def _is_expired_expiry(expiry_ymd: str) -> bool:
+        try:
+            exp = datetime.strptime(str(expiry_ymd), "%Y%m%d").date()
+        except ValueError:
+            return True
+        return exp < date.today()
 
     @staticmethod
     def _extract_float(row: Dict[str, Any], keys: List[str]) -> float:
