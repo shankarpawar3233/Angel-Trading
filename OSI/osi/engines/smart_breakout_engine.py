@@ -5,6 +5,7 @@ from collections import deque
 from typing import Deque, Dict, Optional
 
 from osi.core.config import settings
+from osi.core.market_phase import get_market_phase, volume_multiplier_for_phase
 from osi.core.models import EngineOutput, MarketTick
 from osi.engines.base import BaseEngine
 
@@ -17,6 +18,7 @@ def smart_breakout_engine(
     vwap,
     avg_volume,
     intrabar_data=None,
+    market_phase="OFF",
 ):
     cur = current_candle or {}
     prev = previous_candle or {}
@@ -61,7 +63,8 @@ def smart_breakout_engine(
 
     breakout_up = c_high > p_high > 0
     breakout_down = c_low < p_low < 10_000_000
-    volume_spike = avg_vol > 0 and c_vol > (avg_vol * float(settings.smart_breakout_volume_spike_ratio))
+    volume_ratio = volume_multiplier_for_phase(str(market_phase or "OFF"))
+    volume_spike = avg_vol > 0 and c_vol > (avg_vol * volume_ratio)
     if not volume_spike:
         return {
             "engine": "smart_breakout_engine",
@@ -86,8 +89,13 @@ def smart_breakout_engine(
             strong_momentum_up = momentum > m_th
             strong_momentum_down = momentum < -m_th
 
+    afternoon = str(market_phase).upper() == "AFTERNOON"
+    breakout_buffer = candle_range * 0.05 if afternoon else 0.0
+    tight_breakout_up = c_close > (p_high + breakout_buffer)
+    tight_breakout_down = c_close < (p_low - breakout_buffer)
+
     # Case A: real breakout up
-    if breakout_up and (not fake_breakout_up) and c_close > vwap_v and volume_spike and strong_body:
+    if breakout_up and tight_breakout_up and (not fake_breakout_up) and c_close > vwap_v and volume_spike and strong_body:
         strength = 0.84 if strong_momentum_up else 0.8
         confidence = 76 if strong_momentum_up else 68
         return {
@@ -95,11 +103,11 @@ def smart_breakout_engine(
             "signal": "BUY_CE",
             "strength": round(strength, 3),
             "confidence": int(confidence),
-            "reason": "real_breakout",
+            "reason": f"real_breakout|phase={market_phase}|vol_ratio={volume_ratio:.1f}",
         }
 
     # Case B: real breakout down
-    if breakout_down and (not fake_breakout_down) and c_close < vwap_v and volume_spike and strong_body:
+    if breakout_down and tight_breakout_down and (not fake_breakout_down) and c_close < vwap_v and volume_spike and strong_body:
         strength = 0.84 if strong_momentum_down else 0.8
         confidence = 76 if strong_momentum_down else 68
         return {
@@ -107,7 +115,7 @@ def smart_breakout_engine(
             "signal": "BUY_PE",
             "strength": round(strength, 3),
             "confidence": int(confidence),
-            "reason": "real_breakout",
+            "reason": f"real_breakout|phase={market_phase}|vol_ratio={volume_ratio:.1f}",
         }
 
     # Case C: fake breakout trap / liquidity sweep reversal
@@ -117,7 +125,7 @@ def smart_breakout_engine(
             "signal": "BUY_PE",
             "strength": 0.83,
             "confidence": 70,
-            "reason": "fake_breakout",
+            "reason": f"fake_breakout|phase={market_phase}|vol_ratio={volume_ratio:.1f}",
         }
     if breakout_down and fake_breakout_down:
         return {
@@ -125,7 +133,7 @@ def smart_breakout_engine(
             "signal": "BUY_CE",
             "strength": 0.83,
             "confidence": 70,
-            "reason": "liquidity_sweep",
+            "reason": f"liquidity_sweep|phase={market_phase}|vol_ratio={volume_ratio:.1f}",
         }
 
     # Case D: no signal
@@ -151,12 +159,14 @@ class SmartBreakoutEngine(BaseEngine):
         tf = str(tick.meta.get("timeframe") or "1m")
         avg_vol = self._avg_volume(sym, tf, candle, state)
         intrabar_data = tick.meta.get("intrabar_data") or None
+        market_phase = str(tick.meta.get("market_phase") or get_market_phase(tick.timestamp))
         out = smart_breakout_engine(
             current_candle=candle,
             previous_candle=prev,
             vwap=float(tick.meta.get("vwap") or 0.0),
             avg_volume=avg_vol,
             intrabar_data=intrabar_data,
+            market_phase=market_phase,
         )
 
         candle_id = str((candle.get("end") or candle.get("start") or ""))
@@ -166,9 +176,10 @@ class SmartBreakoutEngine(BaseEngine):
         if out["signal"] != "NONE":
             self._mark_fired(sym, tf, candle_id, state)
             logger.info(
-                "SMART BREAKOUT: type=%s symbol=%s price=%.2f conf=%s reason=%s",
+                "SMART BREAKOUT: type=%s symbol=%s phase=%s price=%.2f conf=%s reason=%s",
                 out.get("reason"),
                 sym,
+                market_phase,
                 float(tick.index_price),
                 out.get("confidence"),
                 out.get("reason"),

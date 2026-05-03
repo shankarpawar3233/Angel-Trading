@@ -11,6 +11,7 @@ from typing import Any, Deque, Dict, List, Optional, Tuple
 from uuid import uuid4
 
 from osi.core.config import settings
+from osi.core.market_phase import engine_weight, get_market_phase, is_no_trade_soft_zone
 from osi.core.models import ConsensusOutput, DashboardSignalCard, MarketTick, SignalRecord, SignalStatus
 from osi.services.expiry_engine import ExpiryEngine
 from osi.services.option_momentum import OptionMomentumService
@@ -51,6 +52,18 @@ class SignalManager:
         self.premium_max = 200.0
         self.no_move_exit_seconds = 240
         self.no_move_threshold_ratio = 0.03
+        self.min_hold_seconds = 120.0
+        self.max_hold_seconds = 720.0
+        self.momentum_exit_stale_ticks = 8
+        self.momentum_exit_confidence_drop_ratio = 0.20
+        self.momentum_exit_max_incoming_strength = 0.65
+        self.flip_min_strength = 0.85
+        self.flip_min_confidence = 75.0
+        self.flip_extreme_strength = 0.92
+        self.flip_extreme_confidence = 85.0
+        self.tick_confirmation_required = 3
+        self._last_consensus_by_symbol: Dict[str, ConsensusOutput] = {}
+        self._direction_streak: Dict[str, Tuple[Optional[str], int]] = {}
         self.enable_runner_t3 = True
         self.execution_lots = max(1.0, float(getattr(settings, "execution_lots", 20.0)))
         self.nifty_lots = max(1.0, float(getattr(settings, "nifty_lots", self.execution_lots)))
@@ -70,11 +83,51 @@ class SignalManager:
         if tick.symbol not in self.enabled_symbols:
             return None
         self._reset_daily_risk_if_needed()
+        lead_engine = self._lead_engine(consensus)
+        regime = str(tick.meta.get("regime") or "").upper()
+        market_phase = str(tick.meta.get("market_phase") or consensus.market_phase or get_market_phase(tick.timestamp))
+        execution_only = True
+        hard_intrabar = self._is_hard_intrabar_override(consensus)
+        if hard_intrabar:
+            hard_intrabar_out = next(
+                (
+                    row
+                    for row in consensus.engine_outputs
+                    if row.engine == "intrabar_engine" and row.signal != "NONE" and float(row.strength or 0.0) >= 0.7
+                ),
+                None,
+            )
+            if hard_intrabar_out is not None:
+                consensus.signal = hard_intrabar_out.signal
+                weight = engine_weight(hard_intrabar_out.engine, market_phase)
+                consensus.confidence = float(
+                    min(
+                        100.0,
+                        (
+                            hard_intrabar_out.confidence
+                            if hard_intrabar_out.confidence is not None
+                            else max(50.0, float(hard_intrabar_out.strength or 0.0) * 100.0)
+                        )
+                        * weight,
+                    )
+                )
+                consensus.weighted_score = round(float(hard_intrabar_out.strength or 0.0) * weight, 4)
+                lead_engine = "intrabar_engine"
+        self._last_consensus_by_symbol[tick.symbol] = consensus
+        streak_count = self._update_direction_streak(tick.symbol, str(consensus.signal))
         self._update_lifecycle(tick)
         if self.manual_pause:
             self._mark_rejected(tick, consensus, "manual_pause", breakdown=self._empty_breakdown(float(consensus.confidence)))
             return None
         if self._risk_blocked():
+            self.logger.warning(
+                "risk_blocked_new_signals symbol=%s day_pnl=%.2f cap=%.2f sl_streak=%s max_sl=%s",
+                tick.symbol,
+                self.daily_realized_pnl,
+                float(settings.daily_loss_cap),
+                self.consecutive_sl_count,
+                int(settings.max_consecutive_sl),
+            )
             self._mark_rejected(tick, consensus, "risk_blocked", breakdown=self._empty_breakdown(float(consensus.confidence)))
             return None
         if not self._is_trade_time_open():
@@ -88,28 +141,6 @@ class SignalManager:
             )
             return None
 
-        lead_engine = self._lead_engine(consensus)
-        regime = str(tick.meta.get("regime") or "").upper()
-        execution_only = True
-        hard_intrabar = self._is_hard_intrabar_override(consensus)
-        hard_intrabar_out = None
-        if hard_intrabar:
-            hard_intrabar_out = next(
-                (
-                    row
-                    for row in consensus.engine_outputs
-                    if row.engine == "intrabar_engine" and row.signal != "NONE" and float(row.strength or 0.0) >= 0.7
-                ),
-                None,
-            )
-            if hard_intrabar_out is not None:
-                consensus.signal = hard_intrabar_out.signal
-                consensus.confidence = float(
-                    hard_intrabar_out.confidence
-                    if hard_intrabar_out.confidence is not None
-                    else max(50.0, float(hard_intrabar_out.strength or 0.0) * 100.0)
-                )
-                lead_engine = "intrabar_engine"
         directional_strength = max(
             [float(row.strength) for row in consensus.engine_outputs if row.signal == consensus.signal] or [0.0]
         )
@@ -139,6 +170,11 @@ class SignalManager:
         momentum_adjustment = 0.0
         dead_zone_penalty = 0.0
         notes: List[str] = []
+        notes.append(f"phase={market_phase}")
+        if consensus.selected_engine:
+            notes.append(f"selected_engine={consensus.selected_engine}")
+        if consensus.engine_weights:
+            notes.append(f"engine_weights={consensus.engine_weights}")
         if primary_trigger:
             notes.append(f"primary_trigger={lead_engine}")
         notes.append(f"directional_strength={directional_strength:.3f}")
@@ -233,8 +269,22 @@ class SignalManager:
                 )
                 self._mark_rejected(tick, consensus, "duplicate_active", notes, self._empty_breakdown(base_confidence))
                 return None
-            # Opposite side detected. Hard intrabar override always replaces.
-            if hard_intrabar or float(consensus.confidence) >= float(existing.confidence) + 5.0:
+            # Opposite side: controlled replacement (flip protection + tick confirmation).
+            now_flip = datetime.now(timezone.utc)
+            trade_age_sec = (now_flip - existing.entry_time).total_seconds() if existing.entry_time else 0.0
+            early_extreme = directional_strength >= float(self.flip_extreme_strength) and float(consensus.confidence) >= float(
+                self.flip_extreme_confidence
+            )
+            strong_flip = (
+                directional_strength >= float(self.flip_min_strength) and float(consensus.confidence) >= float(self.flip_min_confidence)
+            ) or (
+                hard_intrabar
+                and directional_strength >= 0.7
+                and float(consensus.confidence) >= 50.0
+            )
+            age_ok = trade_age_sec >= float(self.min_hold_seconds) or early_extreme
+            replacement_ok = streak_count >= int(self.tick_confirmation_required) and strong_flip and age_ok
+            if replacement_ok:
                 latest_price = self._current_option_ltp(
                     tick=tick,
                     option_symbol=existing.option_symbol,
@@ -249,22 +299,64 @@ class SignalManager:
                 )
                 bypass_cooldown = True
                 self.logger.info(
-                    "SIGNAL REPLACED symbol=%s old=%s new=%s old_conf=%.2f new_conf=%.2f",
+                    "flip_allowed symbol=%s old=%s new=%s streak=%s trade_age_sec=%.1f strength=%.3f conf=%.2f extreme=%s",
                     tick.symbol,
                     existing.signal,
                     consensus.signal,
-                    float(existing.confidence),
+                    streak_count,
+                    trade_age_sec,
+                    directional_strength,
                     float(consensus.confidence),
+                    early_extreme,
                 )
             else:
-                self.logger.debug(
-                    "SIGNAL BLOCKED symbol=%s reason=opposite_ignored old_conf=%.2f new_conf=%.2f",
+                self.logger.info(
+                    "flip_blocked symbol=%s existing=%s incoming=%s streak=%s trade_age_sec=%.1f "
+                    "strength=%.3f conf=%.2f strong_flip=%s age_ok=%s",
                     tick.symbol,
-                    float(existing.confidence),
+                    existing.signal,
+                    consensus.signal,
+                    streak_count,
+                    trade_age_sec,
+                    directional_strength,
                     float(consensus.confidence),
+                    strong_flip,
+                    age_ok,
                 )
-                self._mark_rejected(tick, consensus, "opposite_ignored", notes, self._empty_breakdown(base_confidence))
+                self._mark_rejected(tick, consensus, "flip_protection", notes, self._empty_breakdown(base_confidence))
                 return None
+
+        flat_symbol = len(self._active_positions(tick.symbol)) == 0
+        if (
+            flat_symbol
+            and consensus.signal in {"BUY_CE", "BUY_PE"}
+            and streak_count < int(self.tick_confirmation_required)
+            and not hard_intrabar
+        ):
+            self.logger.info(
+                "tick_confirmation_failed symbol=%s signal=%s streak=%s required=%s",
+                tick.symbol,
+                consensus.signal,
+                streak_count,
+                self.tick_confirmation_required,
+            )
+            self._mark_rejected(
+                tick,
+                consensus,
+                "tick_confirmation_failed",
+                notes=[f"same_direction_ticks={streak_count}", f"required={self.tick_confirmation_required}"],
+                breakdown=self._empty_breakdown(base_confidence),
+            )
+            return None
+        if flat_symbol and consensus.signal in {"BUY_CE", "BUY_PE"}:
+            if streak_count >= int(self.tick_confirmation_required) or hard_intrabar:
+                self.logger.info(
+                    "tick_confirmation_passed symbol=%s signal=%s streak=%s hard_intrabar=%s",
+                    tick.symbol,
+                    consensus.signal,
+                    streak_count,
+                    hard_intrabar,
+                )
 
         if (not bypass_cooldown) and self._in_cooldown(tick.symbol):
             self.logger.debug("SIGNAL BLOCKED symbol=%s reason=cooldown", tick.symbol)
@@ -299,6 +391,27 @@ class SignalManager:
         option_expiry = str(contract.get("expiry") or "")
         option_type = str(contract.get("option_type") or "")
         option_token = str(contract.get("token") or "")
+        qty_preview = self._execution_quantity_for_symbol(tick.symbol)
+        cap = float(getattr(settings, "max_trade_notional_rupees", 0.0) or 0.0)
+        if cap > 0.0 and float(option_ltp) > 0.0:
+            notional = float(option_ltp) * float(qty_preview)
+            if notional > cap:
+                self.logger.warning(
+                    "Risk blocked new trade: notional_cap_exceeded symbol=%s notional=%.2f cap=%.2f qty=%.2f ltp=%.2f",
+                    tick.symbol,
+                    notional,
+                    cap,
+                    qty_preview,
+                    float(option_ltp),
+                )
+                self._mark_rejected(
+                    tick,
+                    consensus,
+                    "notional_cap_exceeded",
+                    notes=[f"notional={notional:.2f}", f"cap={cap:.2f}"],
+                    breakdown=self._empty_breakdown(base_confidence),
+                )
+                return None
         opt_momentum: Dict[str, float | bool] = {"option_momentum_confirmed": True, "momentum_strength": 0.0}
         if (not hard_intrabar) and (not execution_only):
             if not (self.premium_min <= float(option_ltp) <= self.premium_max):
@@ -345,6 +458,9 @@ class SignalManager:
 
         total_boost = min(20.0, primary_boost + directional_boost + vwap_boost + regime_boost)
         final_confidence = base_confidence + total_boost + momentum_adjustment + dead_zone_penalty
+        if is_no_trade_soft_zone(tick.timestamp):
+            final_confidence -= 10.0
+            notes.append("no_trade_soft_zone:-10")
         final_confidence = max(0.0, min(100.0, final_confidence))
         consensus.confidence = round(final_confidence, 2)
 
@@ -360,6 +476,16 @@ class SignalManager:
         )
         self.last_confidence_breakdown[tick.symbol] = breakdown
 
+        if "no_trade_soft_zone:-10" in notes and final_confidence < 35.0:
+            self._mark_rejected(
+                tick,
+                consensus,
+                "no_trade_zone_confidence",
+                notes=[*notes, "min_required=35"],
+                breakdown=breakdown,
+            )
+            return None
+
         if (not hard_intrabar) and (not execution_only):
             if float(consensus.confidence) < 25.0 and (not primary_trigger):
                 self._mark_rejected(tick, consensus, "low_final_confidence_no_primary", notes, breakdown)
@@ -372,12 +498,19 @@ class SignalManager:
                 return None
         # Momentum remains a soft penalty; no hard reject by momentum alone.
 
-        t1 = round(float(option_ltp) * 1.20, 2)
-        t2 = round(float(option_ltp) * 1.50, 2)
-        t3 = round(float(option_ltp) * 1.80, 2) if self.enable_runner_t3 else None
         stop_reference_index = self._stop_reference_from_candle(tick, consensus.signal)
         strategy = self._strategy_name(lead_engine)
         sl_ratio = self._premium_stop_ratio(strategy)
+        if market_phase == "AFTERNOON" and strategy == "smart_breakout":
+            sl_ratio = min(sl_ratio, 0.18)
+            t1 = round(float(option_ltp) * 1.10, 2)
+            t2 = round(float(option_ltp) * 1.15, 2)
+            t3 = round(float(option_ltp) * 1.25, 2) if self.enable_runner_t3 else None
+            notes.append("afternoon_breakout_fast_targets")
+        else:
+            t1 = round(float(option_ltp) * 1.20, 2)
+            t2 = round(float(option_ltp) * 1.50, 2)
+            t3 = round(float(option_ltp) * 1.80, 2) if self.enable_runner_t3 else None
         stop_loss = round(float(option_ltp) * (1.0 - sl_ratio), 2)
         if (not hard_intrabar) and (not execution_only):
             entry_filter_ok, entry_filter_notes = self._run_entry_filter(
@@ -430,6 +563,9 @@ class SignalManager:
             realized_pnl=0.0,
             max_favorable=0.0,
             max_adverse=0.0,
+            entry_confidence=float(consensus.confidence),
+            max_favorable_price=round(option_ltp, 2),
+            tick_count_since_last_move=0,
             confidence_breakdown=breakdown,
             entry_time=now,
             last_ltp_update_at=now,
@@ -516,6 +652,15 @@ class SignalManager:
             signed = self._signed_move(signal, float(latest_price))
             signal.max_favorable = round(max(signal.max_favorable, signed), 2)
             signal.max_adverse = round(min(signal.max_adverse, signed), 2)
+            mf_price = signal.max_favorable_price
+            if mf_price is None:
+                signal.max_favorable_price = round(float(latest_price), 2)
+                signal.tick_count_since_last_move = 0
+            elif float(latest_price) > float(mf_price) + 1e-9:
+                signal.max_favorable_price = round(float(latest_price), 2)
+                signal.tick_count_since_last_move = 0
+            else:
+                signal.tick_count_since_last_move = int(signal.tick_count_since_last_move or 0) + 1
             self.logger.debug(
                 "SIGNAL UPDATED id=%s ltp=%.2f mfe=%.2f mae=%.2f",
                 signal.signal_id,
@@ -629,6 +774,52 @@ class SignalManager:
                         reason="STOP_LOSS",
                         sl_hit=True,
                     )
+            elif self._should_max_hold_exit(signal, now):
+                signal.lifecycle_events.append(
+                    {
+                        "event": "MAX_HOLD_EXIT",
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "price": round(latest_price, 2),
+                        "held_seconds": round(self._trade_age_seconds(signal, now), 1),
+                    }
+                )
+                self.logger.info(
+                    "momentum_exit symbol=%s signal_id=%s kind=max_hold held_seconds=%.1f price=%.2f",
+                    signal.symbol,
+                    signal.signal_id,
+                    self._trade_age_seconds(signal, now),
+                    float(latest_price),
+                )
+                self._close_signal(
+                    signal,
+                    status=SignalStatus.CLOSED,
+                    exit_price=float(latest_price),
+                    reason="MAX_HOLD_TIME",
+                    sl_hit=False,
+                )
+            elif self._should_momentum_exit(signal, tick, now):
+                signal.lifecycle_events.append(
+                    {
+                        "event": "MOMENTUM_EXIT",
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "price": round(latest_price, 2),
+                        "no_new_high_ticks": int(signal.tick_count_since_last_move),
+                    }
+                )
+                self.logger.info(
+                    "momentum_exit symbol=%s signal_id=%s kind=strength_decay ticks_since_high=%s price=%.2f",
+                    signal.symbol,
+                    signal.signal_id,
+                    signal.tick_count_since_last_move,
+                    float(latest_price),
+                )
+                self._close_signal(
+                    signal,
+                    status=SignalStatus.CLOSED,
+                    exit_price=float(latest_price),
+                    reason="MOMENTUM_EXIT",
+                    sl_hit=False,
+                )
             elif self._is_market_time_exit():
                 signal.lifecycle_events.append(
                     {"event": "TIME_EXIT", "timestamp": datetime.now(timezone.utc).isoformat(), "price": round(latest_price, 2)}
@@ -640,22 +831,57 @@ class SignalManager:
                     reason="TIME_EXIT",
                     sl_hit=False,
                 )
-            elif self._is_no_move_exit(signal, latest_price):
-                signal.lifecycle_events.append(
-                    {
-                        "event": "TIME_EXIT",
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                        "price": round(latest_price, 2),
-                    }
-                )
-                self._close_signal(
-                    signal,
-                    status=SignalStatus.CLOSED,
-                    exit_price=float(latest_price),
-                    reason="TIME_EXIT_NO_MOVE",
-                    sl_hit=False,
-                )
         self._persist_storage_if_due()
+
+    def _update_direction_streak(self, symbol: str, signal: str) -> int:
+        if signal not in {"BUY_CE", "BUY_PE"}:
+            self._direction_streak[symbol] = (None, 0)
+            return 0
+        prev_dir, prev_n = self._direction_streak.get(symbol, (None, 0))
+        if prev_dir == signal:
+            n = prev_n + 1
+        else:
+            n = 1
+        self._direction_streak[symbol] = (signal, n)
+        return n
+
+    @staticmethod
+    def _trade_age_seconds(signal: SignalRecord, now: datetime) -> float:
+        if signal.entry_time is None:
+            return 0.0
+        et = signal.entry_time
+        if et.tzinfo is None:
+            et = et.replace(tzinfo=timezone.utc)
+        return max(0.0, (now - et).total_seconds())
+
+    @staticmethod
+    def _reference_entry_confidence(signal: SignalRecord) -> float:
+        ec = float(signal.entry_confidence or 0.0)
+        if ec > 1e-6:
+            return ec
+        return float(signal.confidence or 0.0)
+
+    def _should_max_hold_exit(self, signal: SignalRecord, now: datetime) -> bool:
+        return self._trade_age_seconds(signal, now) >= float(self.max_hold_seconds)
+
+    def _should_momentum_exit(self, signal: SignalRecord, tick: MarketTick, now: datetime) -> bool:
+        cons = self._last_consensus_by_symbol.get(signal.symbol)
+        if cons is None or str(cons.signal) != str(signal.signal):
+            return False
+        if self._trade_age_seconds(signal, now) < float(self.min_hold_seconds):
+            return False
+        entry_c = self._reference_entry_confidence(signal)
+        if entry_c <= 1e-6:
+            return False
+        drop_ratio = (entry_c - float(cons.confidence)) / entry_c
+        if drop_ratio < float(self.momentum_exit_confidence_drop_ratio):
+            return False
+        aligned_strength = max([float(r.strength or 0.0) for r in cons.engine_outputs if r.signal == cons.signal] or [0.0])
+        if aligned_strength >= float(self.momentum_exit_max_incoming_strength):
+            return False
+        if int(signal.tick_count_since_last_move or 0) < int(self.momentum_exit_stale_ticks):
+            return False
+        return True
 
     def _select_option_contract(self, tick: MarketTick, consensus: ConsensusOutput) -> Optional[Dict[str, Any]]:
         direction = consensus.signal
@@ -879,6 +1105,17 @@ class SignalManager:
             return True
         return False
 
+    def risk_snapshot(self) -> Dict[str, Any]:
+        return {
+            "risk_day_utc": self._risk_day,
+            "daily_realized_pnl": self.daily_realized_pnl,
+            "consecutive_sl_count": self.consecutive_sl_count,
+            "risk_blocked": self._risk_blocked(),
+            "daily_loss_cap": float(settings.daily_loss_cap),
+            "max_consecutive_sl": int(settings.max_consecutive_sl),
+            "max_trade_notional_rupees": float(getattr(settings, "max_trade_notional_rupees", 0.0) or 0.0),
+        }
+
     def _is_market_time_exit(self) -> bool:
         ts = datetime.now(self._ist).time()
         try:
@@ -891,16 +1128,6 @@ class SignalManager:
     def _is_trade_time_open(self) -> bool:
         ts = datetime.now(self._ist).time()
         return time(9, 15) <= ts <= time(15, 30)
-
-    def _is_no_move_exit(self, signal: SignalRecord, latest_price: float) -> bool:
-        if signal.entry_time is None:
-            return False
-        held_seconds = (datetime.now(timezone.utc) - signal.entry_time).total_seconds()
-        if held_seconds < float(self.no_move_exit_seconds):
-            return False
-        movement = abs(float(latest_price) - float(signal.entry_price))
-        threshold = max(1.0, float(signal.entry_price) * float(self.no_move_threshold_ratio))
-        return movement < threshold
 
     @staticmethod
     def _premium_stop_ratio(strategy: str) -> float:
@@ -946,6 +1173,11 @@ class SignalManager:
             "history": self.snapshot_history(),
             "rejected_signals": list(self.rejected_signals[-self.max_history_records :]),
             "paper_signals": list(self.paper_signals[-self.max_history_records :]),
+            "risk_state": {
+                "risk_day": self._risk_day,
+                "daily_realized_pnl": self.daily_realized_pnl,
+                "consecutive_sl_count": self.consecutive_sl_count,
+            },
         }
         self.storage_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         self._last_persist_at = datetime.now(timezone.utc)
@@ -967,6 +1199,18 @@ class SignalManager:
         except (OSError, JSONDecodeError, ValueError):
             self.logger.exception("Failed to load signals storage, starting clean")
             raw = {"active_signals": [], "history": []}
+        rs = raw.get("risk_state") or {}
+        day_rs = str(rs.get("risk_day") or "")
+        day_now = datetime.now(timezone.utc).date().isoformat()
+        if day_rs == day_now:
+            self.daily_realized_pnl = round(float(rs.get("daily_realized_pnl") or 0.0), 2)
+            self.consecutive_sl_count = int(rs.get("consecutive_sl_count") or 0)
+            self.logger.info(
+                "risk_state_restored day=%s daily_realized_pnl=%.2f consecutive_sl=%s",
+                day_rs,
+                self.daily_realized_pnl,
+                self.consecutive_sl_count,
+            )
         self.active_signals = {sym: [] for sym in self.enabled_symbols}
         self.history = []
         self.rejected_signals = []

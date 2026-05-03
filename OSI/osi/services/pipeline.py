@@ -8,6 +8,7 @@ from typing import Any, Dict, List
 from uuid import uuid4
 
 from osi.core.config import settings
+from osi.core.market_phase import engine_weight, engine_weights_for_phase, get_market_phase
 from osi.core.models import Candle, ConsensusOutput, EngineOutput, MarketTick
 from osi.engines.consensus_engine import ConsensusEngine
 from osi.engines.hero_zero_engine import HeroZeroEngine
@@ -59,6 +60,7 @@ class OSIPipeline:
         self._last_state_emit_ts: Dict[str, float] = {}
         self._pending_intrabar: Dict[str, Dict[str, Any]] = {}
         self._latest_strategy_signals: Dict[str, List[Dict[str, Any]]] = {}
+        self._last_intrabar_redis_mono: Dict[str, float] = {}
         self.live_index_data: Dict[str, Dict[str, Any]] = {
             "NIFTY": {
                 "ltp": 0.0,
@@ -168,6 +170,8 @@ class OSIPipeline:
         self._latest_regime[candle.symbol] = regime
         tick.meta["regime"] = regime
         tick.meta["intrabar_data"] = self._intrabar_context(source_tick)
+        market_phase = get_market_phase(source_tick.timestamp)
+        tick.meta["market_phase"] = market_phase
         self._prev_candle[(candle.symbol, candle.timeframe)] = candle.model_dump(mode="json")
         started = time.perf_counter()
         outputs: List[EngineOutput] = []
@@ -177,17 +181,6 @@ class OSIPipeline:
             if isinstance(intrabar_ts, datetime) and (datetime.now(timezone.utc) - intrabar_ts).total_seconds() <= 5:
                 outputs.append(cached_intrabar["output"])
         for engine in self.engines:
-            if isinstance(engine, MeanReversionEngine) and str(regime).upper() == "TRENDING":
-                outputs.append(
-                    EngineOutput(
-                        engine="mean_reversion_engine",
-                        signal="NONE",
-                        strength=0.0,
-                        confidence=0.0,
-                        reason="mean_reversion_disabled_trending_regime",
-                    )
-                )
-                continue
             t0 = time.perf_counter()
             out = engine.evaluate(tick, self.engine_state)
             elapsed_ms = (time.perf_counter() - t0) * 1000.0
@@ -212,22 +205,44 @@ class OSIPipeline:
         # zero_hero > strong intrabar >=0.7 > smart_breakout > NONE
         ib_row = next((r for r in outputs if r.engine == "intrabar_engine"), None)
         if ib_row is not None and ib_row.signal != "NONE" and float(ib_row.strength or 0.0) >= 0.7:
+            phase_weight = engine_weight(ib_row.engine, market_phase)
             consensus = ConsensusOutput(
                 signal=ib_row.signal,
-                confidence=float(
-                    ib_row.confidence if ib_row.confidence is not None else max(50.0, float(ib_row.strength or 0.0) * 100.0)
+                confidence=round(
+                    min(
+                        100.0,
+                        float(
+                            ib_row.confidence
+                            if ib_row.confidence is not None
+                            else max(50.0, float(ib_row.strength or 0.0) * 100.0)
+                        )
+                        * phase_weight,
+                    ),
+                    2,
                 ),
-                weighted_score=float(ib_row.strength or 0.0),
+                weighted_score=round(float(ib_row.strength or 0.0) * phase_weight, 4),
                 engine_outputs=[ib_row],
+                market_phase=market_phase,
+                engine_weights=engine_weights_for_phase(market_phase),
+                selected_engine=ib_row.engine,
             )
         else:
-            consensus = self.consensus.combine(outputs, regime=regime)
+            consensus = self.consensus.combine(outputs, regime=regime, market_phase=market_phase)
         logger.info(
-            "SIGNAL FLOW symbol=%s engines=%s decision=%s conf=%.2f",
+            "MARKET PHASE: %s symbol=%s weights=%s selected_engine=%s",
+            market_phase,
             tick.symbol,
+            consensus.engine_weights,
+            consensus.selected_engine or "-",
+        )
+        logger.info(
+            "SIGNAL FLOW symbol=%s phase=%s engines=%s decision=%s conf=%.2f selected_engine=%s",
+            tick.symbol,
+            market_phase,
             ",".join(f"{o.engine}:{o.signal}:{float(o.strength or 0.0):.3f}" for o in outputs),
             consensus.signal,
             float(consensus.confidence or 0.0),
+            consensus.selected_engine or "-",
         )
         sb_row = next((r for r in outputs if r.engine == "smart_breakout_engine"), None)
         last_intrabar_ts = self._last_intrabar_trigger_ts.get(tick.symbol)
@@ -261,6 +276,7 @@ class OSIPipeline:
             "timestamp": tick.timestamp.isoformat(),
             "candle": candle.model_dump(mode="json"),
             "regime": regime,
+            "market_phase": market_phase,
             "engine_outputs": [row.model_dump() for row in outputs],
             "strategy_signals": strategy_signals,
             "consensus": consensus.model_dump(),
@@ -292,15 +308,84 @@ class OSIPipeline:
             "process_to_signal": round(max(0.0, process_to_signal_ms), 3),
             "total_signal": round(total_signal_latency_ms, 3),
         }
-        await self.redis_store.set_json(f"osi:live:{tick.symbol}", snapshot_payload)
-        self._last_live_snapshot[tick.symbol] = snapshot_payload
-        await self.postgres_repo.store_engine_snapshot(
-            snapshot_id=f"ENG-{uuid4().hex[:12]}",
-            symbol=tick.symbol,
-            ts=datetime.now(timezone.utc),
-            payload=snapshot_payload,
+        snapshot_payload["entry_mode"] = f"candle_{candle.timeframe}"
+        self._log_latency_path(
+            snapshot_payload["entry_mode"],
+            tick.symbol,
+            source_tick,
+            tick_to_process_ms,
+            process_to_signal_ms,
+        )
+        await self._publish_live_snapshot(
+            tick.symbol,
+            snapshot_payload,
+            path=snapshot_payload["entry_mode"],
+            force_redis=True,
+            persist_pg=True,
         )
         return snapshot_payload
+
+    async def _publish_live_snapshot(
+        self,
+        symbol: str,
+        payload: Dict[str, Any],
+        *,
+        path: str,
+        force_redis: bool = False,
+        persist_pg: bool = True,
+    ) -> None:
+        self._last_live_snapshot[symbol] = payload
+        interval_ms = float(getattr(settings, "intrabar_redis_min_interval_ms", 0.0) or 0.0)
+        intrabar_snapshot_paths = {
+            "intrabar_direct_execution",
+            "intrabar_pending_confirmation",
+            "intrabar_confirmed_execution",
+        }
+        throttle = path in intrabar_snapshot_paths and interval_ms > 0 and not force_redis
+        if throttle:
+            now_m = time.perf_counter()
+            last = float(self._last_intrabar_redis_mono.get(symbol) or 0.0)
+            if (now_m - last) * 1000.0 < interval_ms:
+                return
+            self._last_intrabar_redis_mono[symbol] = now_m
+        await self.redis_store.set_json(f"osi:live:{symbol}", payload)
+        if persist_pg:
+            await self.postgres_repo.store_engine_snapshot(
+                snapshot_id=f"ENG-{uuid4().hex[:12]}",
+                symbol=symbol,
+                ts=datetime.now(timezone.utc),
+                payload=payload,
+            )
+
+    def _log_latency_path(
+        self,
+        path: str,
+        symbol: str,
+        tick: MarketTick,
+        tick_to_process_ms: float,
+        process_to_signal_ms: float,
+    ) -> None:
+        if not bool(getattr(settings, "latency_path_log_enabled", True)):
+            return
+        if tick.exchange_timestamp is not None:
+            total_ms = max(
+                0.0, (datetime.now(timezone.utc) - tick.exchange_timestamp).total_seconds() * 1000.0
+            )
+        else:
+            total_ms = max(0.0, (datetime.now(timezone.utc) - tick.received_at).total_seconds() * 1000.0)
+        try:
+            qdepth = self.tick_queue.qsize()
+        except Exception:
+            qdepth = -1
+        logger.info(
+            "LATENCY_PATH path=%s symbol=%s tick_to_process_ms=%.2f process_to_signal_ms=%.2f total_signal_ms=%.2f queue_depth=%s",
+            path,
+            symbol,
+            max(0.0, tick_to_process_ms),
+            max(0.0, process_to_signal_ms),
+            total_ms,
+            qdepth,
+        )
 
     async def _process_intrabar_engine(self, tick: MarketTick) -> Dict[str, Any] | None:
         live_candle = self.candle_builder.get_live_candle(tick.symbol, "1m")
@@ -325,10 +410,12 @@ class OSIPipeline:
             if float(vwap_st.get("vol") or 0.0) > 0.0
             else float(tick.index_price)
         )
+        market_phase = get_market_phase(tick.timestamp)
         intrabar_tick = MarketTick(
             symbol=tick.symbol,
             index_price=tick.index_price,
             received_at=tick.received_at,
+            exchange_timestamp=tick.exchange_timestamp,
             timestamp=tick.timestamp,
             option_chain=tick.option_chain,
             meta={
@@ -338,6 +425,7 @@ class OSIPipeline:
                 "candle": live_candle,
                 "vwap": vwap,
                 "regime": tick.meta.get("regime"),
+                "market_phase": market_phase,
             },
         )
         t0 = time.perf_counter()
@@ -371,25 +459,33 @@ class OSIPipeline:
                 float(intrabar.confidence or 0.0),
                 round(float(intrabar.strength or 0.0) * 100.0, 2),
             )
+            phase_weight = engine_weight(intrabar.engine, market_phase)
             consensus = ConsensusOutput(
                 signal=intrabar.signal,
-                confidence=float(confidence),
-                weighted_score=round(float(intrabar.strength or 0.0), 4),
+                confidence=round(min(100.0, float(confidence) * phase_weight), 2),
+                weighted_score=round(float(intrabar.strength or 0.0) * phase_weight, 4),
                 engine_outputs=[intrabar],
+                market_phase=market_phase,
+                engine_weights=engine_weights_for_phase(market_phase),
+                selected_engine=intrabar.engine,
             )
             self.metrics.record_confidence(consensus.confidence)
+            ib_started = time.perf_counter()
             signal = self.signal_manager.process_consensus(intrabar_tick, consensus)
+            proc_ib_ms = (time.perf_counter() - ib_started) * 1000.0
             self._append_decision(intrabar_tick, consensus, signal)
             self._latest_intrabar_output[tick.symbol] = {"ts": now, "output": intrabar}
             self._last_intrabar_trigger_ts[tick.symbol] = now
             if signal is not None:
                 await self._persist_signal(signal)
+            tick_ms_ib = self._real_ingest_latency_ms(tick)
             payload = {
                 "symbol": intrabar_tick.symbol,
                 "index_price": intrabar_tick.index_price,
                 "timestamp": intrabar_tick.timestamp.isoformat(),
                 "candle": {"timeframe": "intrabar", **live_candle_json},
                 "regime": intrabar_tick.meta.get("regime"),
+                "market_phase": market_phase,
                 "engine_outputs": [intrabar.model_dump()],
                 "strategy_signals": list(self._latest_strategy_signals.get(tick.symbol) or []),
                 "consensus": consensus.model_dump(),
@@ -404,14 +500,36 @@ class OSIPipeline:
                 "confidence_breakdown": self.signal_manager.latest_confidence_breakdown(intrabar_tick.symbol),
                 "entry_mode": "intrabar_direct_execution",
                 "market_indices": self.snapshot_market_indices(),
+                "latency_ms": {
+                    "tick_to_process": round(max(0.0, tick_ms_ib), 3),
+                    "process_to_signal": round(max(0.0, proc_ib_ms), 3),
+                    "total_signal": round(
+                        max(
+                            0.0,
+                            (datetime.now(timezone.utc) - tick.exchange_timestamp).total_seconds() * 1000.0,
+                        )
+                        if tick.exchange_timestamp is not None
+                        else max(
+                            0.0,
+                            (datetime.now(timezone.utc) - tick.received_at).total_seconds() * 1000.0,
+                        ),
+                        3,
+                    ),
+                },
             }
-            await self.redis_store.set_json(f"osi:live:{tick.symbol}", payload)
-            self._last_live_snapshot[tick.symbol] = payload
-            await self.postgres_repo.store_engine_snapshot(
-                snapshot_id=f"ENG-{uuid4().hex[:12]}",
-                symbol=tick.symbol,
-                ts=datetime.now(timezone.utc),
-                payload=payload,
+            self._log_latency_path(
+                "intrabar_direct_execution",
+                intrabar_tick.symbol,
+                tick,
+                tick_ms_ib,
+                proc_ib_ms,
+            )
+            await self._publish_live_snapshot(
+                tick.symbol,
+                payload,
+                path="intrabar_direct_execution",
+                force_redis=signal is not None,
+                persist_pg=True,
             )
             return payload
 
@@ -438,9 +556,17 @@ class OSIPipeline:
             "timestamp": intrabar_tick.timestamp.isoformat(),
             "candle": {"timeframe": "intrabar", **live_candle_json},
             "regime": intrabar_tick.meta.get("regime"),
+            "market_phase": market_phase,
             "engine_outputs": [intrabar.model_dump()],
             "strategy_signals": list(self._latest_strategy_signals.get(tick.symbol) or []),
-            "consensus": {"signal": intrabar.signal, "confidence": intrabar.confidence, "weighted_score": intrabar.strength},
+            "consensus": {
+                "signal": intrabar.signal,
+                "confidence": intrabar.confidence,
+                "weighted_score": intrabar.strength,
+                "market_phase": market_phase,
+                "engine_weights": engine_weights_for_phase(market_phase),
+                "selected_engine": intrabar.engine,
+            },
             "pending_signal": {
                 "status": "PENDING",
                 "signal_tag": "INTRABAR",
@@ -459,8 +585,37 @@ class OSIPipeline:
             "entry_mode": "intrabar_pending_confirmation",
             "market_indices": self.snapshot_market_indices(),
         }
-        await self.redis_store.set_json(f"osi:live:{tick.symbol}", payload)
-        self._last_live_snapshot[tick.symbol] = payload
+        tm_p = self._real_ingest_latency_ms(tick)
+        payload["latency_ms"] = {
+            "tick_to_process": round(max(0.0, tm_p), 3),
+            "process_to_signal": 0.0,
+            "total_signal": round(
+                max(
+                    0.0,
+                    (datetime.now(timezone.utc) - tick.exchange_timestamp).total_seconds() * 1000.0,
+                )
+                if tick.exchange_timestamp is not None
+                else max(
+                    0.0,
+                    (datetime.now(timezone.utc) - tick.received_at).total_seconds() * 1000.0,
+                ),
+                3,
+            ),
+        }
+        self._log_latency_path(
+            "intrabar_pending_confirmation",
+            intrabar_tick.symbol,
+            tick,
+            tm_p,
+            0.0,
+        )
+        await self._publish_live_snapshot(
+            tick.symbol,
+            payload,
+            path="intrabar_pending_confirmation",
+            force_redis=False,
+            persist_pg=False,
+        )
         return payload
 
     async def _process_pending_intrabar_confirmation(self, tick: MarketTick) -> Dict[str, Any] | None:
@@ -497,6 +652,7 @@ class OSIPipeline:
             return None
 
         output: EngineOutput = pending["output"]
+        market_phase = get_market_phase(tick.timestamp)
         trigger_price = float(pending["trigger_price"])
         vwap = float(pending["vwap"])
         momentum_ctx = self._intrabar_context(tick)
@@ -529,6 +685,7 @@ class OSIPipeline:
             float(output.confidence or 0.0),
             round(output.strength * 100.0, 2),
         )
+        phase_weight = engine_weight(output.engine, market_phase)
         if confidence < 50.0:
             self.signal_manager.record_rejected_event(
                 symbol=str(tick.symbol),
@@ -540,14 +697,18 @@ class OSIPipeline:
             return None
         consensus = ConsensusOutput(
             signal=output.signal,
-            confidence=confidence,
-            weighted_score=round(output.strength, 4),
+            confidence=round(min(100.0, confidence * phase_weight), 2),
+            weighted_score=round(output.strength * phase_weight, 4),
             engine_outputs=[output],
+            market_phase=market_phase,
+            engine_weights=engine_weights_for_phase(market_phase),
+            selected_engine=output.engine,
         )
         confirm_tick = MarketTick(
             symbol=tick.symbol,
             index_price=float(tick.index_price),
             received_at=tick.received_at,
+            exchange_timestamp=tick.exchange_timestamp,
             timestamp=tick.timestamp,
             option_chain=tick.option_chain,
             meta={
@@ -557,18 +718,23 @@ class OSIPipeline:
                 "candle": live_candle,
                 "vwap": vwap,
                 "regime": tick.meta.get("regime"),
+                "market_phase": market_phase,
             },
         )
+        cf_started = time.perf_counter()
         signal = self.signal_manager.process_consensus(confirm_tick, consensus)
+        proc_cf_ms = (time.perf_counter() - cf_started) * 1000.0
         self._append_decision(confirm_tick, consensus, signal)
         self._latest_intrabar_output[tick.symbol] = {"ts": now, "output": output}
         if signal is not None:
             await self._persist_signal(signal)
+        tick_cf_ms = self._real_ingest_latency_ms(tick)
         payload = {
             "symbol": tick.symbol,
             "index_price": tick.index_price,
             "timestamp": tick.timestamp.isoformat(),
             "regime": tick.meta.get("regime"),
+            "market_phase": market_phase,
             "engine_outputs": [output.model_dump()],
             "strategy_signals": list(self._latest_strategy_signals.get(tick.symbol) or []),
             "consensus": consensus.model_dump(),
@@ -583,14 +749,36 @@ class OSIPipeline:
             "confidence_breakdown": self.signal_manager.latest_confidence_breakdown(tick.symbol),
             "entry_mode": "intrabar_confirmed_execution",
             "market_indices": self.snapshot_market_indices(),
+            "latency_ms": {
+                "tick_to_process": round(max(0.0, tick_cf_ms), 3),
+                "process_to_signal": round(max(0.0, proc_cf_ms), 3),
+                "total_signal": round(
+                    max(
+                        0.0,
+                        (datetime.now(timezone.utc) - tick.exchange_timestamp).total_seconds() * 1000.0,
+                    )
+                    if tick.exchange_timestamp is not None
+                    else max(
+                        0.0,
+                        (datetime.now(timezone.utc) - tick.received_at).total_seconds() * 1000.0,
+                    ),
+                    3,
+                ),
+            },
         }
-        await self.redis_store.set_json(f"osi:live:{tick.symbol}", payload)
-        self._last_live_snapshot[tick.symbol] = payload
-        await self.postgres_repo.store_engine_snapshot(
-            snapshot_id=f"ENG-{uuid4().hex[:12]}",
-            symbol=tick.symbol,
-            ts=datetime.now(timezone.utc),
-            payload=payload,
+        self._log_latency_path(
+            "intrabar_confirmed_execution",
+            tick.symbol,
+            tick,
+            tick_cf_ms,
+            proc_cf_ms,
+        )
+        await self._publish_live_snapshot(
+            tick.symbol,
+            payload,
+            path="intrabar_confirmed_execution",
+            force_redis=signal is not None,
+            persist_pg=True,
         )
         return payload
 
@@ -729,6 +917,7 @@ class OSIPipeline:
     def _build_strategy_signals(self, *, tick: MarketTick, outputs: List[EngineOutput], source: str) -> List[Dict[str, Any]]:
         rows: List[Dict[str, Any]] = []
         now_iso = tick.timestamp.isoformat()
+        market_phase = str(tick.meta.get("market_phase") or "OFF")
         for out in outputs:
             if out.signal == "NONE":
                 continue
@@ -758,6 +947,7 @@ class OSIPipeline:
                     "target_price": target_price,
                     "reason": str(out.reason or ""),
                     "source": source,
+                    "market_phase": market_phase,
                     "mode": str(getattr(settings, "signal_mode", "consensus") or "consensus"),
                 }
             )

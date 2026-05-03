@@ -25,14 +25,17 @@ class OSISettings(BaseSettings):
     market_exit_time_ist: str = "15:30"
     daily_loss_cap: float = 3000.0
     max_consecutive_sl: int = 3
+    # Max premium notional per new trade (qty * option_ltp). 0 = disabled.
+    max_trade_notional_rupees: float = 0.0
+    # Throttle Redis writes on intrabar dashboard payloads (ms). 0 = no throttle.
+    intrabar_redis_min_interval_ms: float = 250.0
+    # Structured LATENCY_PATH logs for candle / intrabar paths
+    latency_path_log_enabled: bool = True
     execution_lots: float = 20.0
     nifty_lots: float = 20.0
     nifty_lot_size: float = 65.0
     sensex_lots: float = 20.0
     sensex_lot_size: float = 20.0
-
-    use_sample_data: bool = True
-    sample_tick_interval_ms: int = 200
 
     websocket_client_code: str = ""
     angel_api_key: str = ""

@@ -58,6 +58,9 @@ class ConsensusOutput(BaseModel):
     confidence: float
     weighted_score: float
     engine_outputs: List[EngineOutput] = Field(default_factory=list)
+    market_phase: str = "OFF"
+    engine_weights: Dict[str, float] = Field(default_factory=dict)
+    selected_engine: str = ""
 
 
 class SignalRecord(BaseModel):
@@ -94,6 +97,10 @@ class SignalRecord(BaseModel):
     realized_pnl: float = 0.0
     max_favorable: float = 0.0
     max_adverse: float = 0.0
+    # Lifecycle (frozen at entry for momentum exit; optional raw watermark)
+    entry_confidence: float = 0.0
+    max_favorable_price: Optional[float] = None
+    tick_count_since_last_move: int = 0
     confidence_breakdown: Dict[str, float] = Field(default_factory=dict)
     entry_time: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     recovered_at: Optional[datetime] = None

@@ -127,7 +127,12 @@ class AngelWebSocketSource:
             backoff = min(float(settings.ws_reconnect_max_backoff_sec), backoff * 2.0)
 
     def _create_or_refresh_session(self) -> Dict[str, str]:
+        from osi.core.log_config import attach_redaction_filters_deep
+
+        attach_redaction_filters_deep()
         from SmartApi import SmartConnect  # type: ignore[import]
+
+        attach_redaction_filters_deep()
 
         api_key = settings.angel_api_key.strip() or str(os.getenv("ANGEL_API_KEY", "")).strip()
         client_id = settings.angel_client_id.strip() or str(os.getenv("ANGEL_CLIENT_ID", "")).strip()
@@ -157,7 +162,12 @@ class AngelWebSocketSource:
         }
 
     def _run_ws_blocking(self) -> None:
+        from osi.core.log_config import attach_redaction_filters_deep
+
+        attach_redaction_filters_deep()
         from SmartApi.smartWebSocketV2 import SmartWebSocketV2  # type: ignore[import]
+
+        attach_redaction_filters_deep()
 
         if not self._auth_payload:
             raise RuntimeError("Auth payload unavailable")

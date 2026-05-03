@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
-from typing import Dict
+from datetime import datetime, timezone
+from typing import Dict, List, Optional
 
 from osi.core.models import EngineOutput, MarketTick
 from osi.engines.base import BaseEngine
@@ -34,17 +34,26 @@ class HeroZeroEngine(BaseEngine):
         nearest_expiry = self._nearest_expiry(chain)
         total_call_volume = 0.0
         total_put_volume = 0.0
-        for row in chain.values():
-            ce = row.get("CE", {})
-            pe = row.get("PE", {})
-            if nearest_expiry:
-                if str(ce.get("expiry") or "") != nearest_expiry and str(pe.get("expiry") or "") != nearest_expiry:
+        # tick.option_chain shape: {expiry_ymd: {strike: {"CE": {...}, "PE": {...}}}}
+        for expiry_key, by_strike in chain.items():
+            if nearest_expiry and str(expiry_key) != nearest_expiry:
+                continue
+            if not isinstance(by_strike, dict):
+                continue
+            for row in by_strike.values():
+                if not isinstance(row, dict):
                     continue
-            total_call_volume += float(ce.get("volume", 0.0) or 0.0)
-            total_put_volume += float(pe.get("volume", 0.0) or 0.0)
+                ce = row.get("CE") or {}
+                pe = row.get("PE") or {}
+                total_call_volume += float(ce.get("volume", 0.0) or 0.0)
+                total_put_volume += float(pe.get("volume", 0.0) or 0.0)
 
         if (total_call_volume + total_put_volume) <= 0:
-            logger.debug("[%s] NONE reason=no_near_expiry_volume", self.name)
+            logger.debug(
+                "[%s] NONE reason=no_near_expiry_volume expiry=%s",
+                self.name,
+                nearest_expiry,
+            )
             return EngineOutput(engine=self.name, signal="NONE", strength=0.0, confidence=0.0, reason="no_near_expiry_volume")
 
         sweep_up = c_high > p_high and c_close < p_high
@@ -53,7 +62,7 @@ class HeroZeroEngine(BaseEngine):
             return EngineOutput(engine=self.name, signal="NONE", strength=0.0, confidence=0.0, reason="no_sweep_reversal")
 
         signal = "BUY_PE" if sweep_up else "BUY_CE"
-        option_momentum = self._option_momentum_strength(tick, state, signal)
+        option_momentum = self._option_momentum_strength(tick, state, signal, nearest_expiry)
         if option_momentum < 0.6:
             return EngineOutput(
                 engine=self.name,
@@ -77,45 +86,66 @@ class HeroZeroEngine(BaseEngine):
 
     @staticmethod
     def _nearest_expiry(chain: Dict) -> str:
-        expiries = set()
-        for row in chain.values():
-            ce = row.get("CE", {})
-            pe = row.get("PE", {})
-            if ce.get("expiry"):
-                expiries.add(str(ce["expiry"]))
-            if pe.get("expiry"):
-                expiries.add(str(pe["expiry"]))
+        expiries = [str(k) for k in chain.keys() if k]
         if not expiries:
             return ""
+        today_ymd = datetime.now(timezone.utc).strftime("%Y%m%d")
+        future = sorted(e for e in expiries if e >= today_ymd)
+        if future:
+            return future[0]
+        # No future expiries available; fall back to the lexicographically smallest.
+        return sorted(expiries)[0]
 
-        def _key(val: str):
-            try:
-                return datetime.strptime(val, "%d%b%Y")
-            except Exception:
-                return datetime.max
+    def _option_momentum_strength(
+        self,
+        tick: MarketTick,
+        state: Dict,
+        signal: str,
+        nearest_expiry: Optional[str] = None,
+    ) -> float:
+        chain = tick.option_chain or {}
+        ce_legs: List[float] = []
+        pe_legs: List[float] = []
+        for expiry_key, by_strike in chain.items():
+            if nearest_expiry and str(expiry_key) != nearest_expiry:
+                continue
+            if not isinstance(by_strike, dict):
+                continue
+            for row in by_strike.values():
+                if not isinstance(row, dict):
+                    continue
+                ce_ltp = (row.get("CE") or {}).get("ltp")
+                pe_ltp = (row.get("PE") or {}).get("ltp")
+                if ce_ltp is not None:
+                    ce_legs.append(float(ce_ltp))
+                if pe_ltp is not None:
+                    pe_legs.append(float(pe_ltp))
 
-        return min(expiries, key=_key)
-
-    def _option_momentum_strength(self, tick: MarketTick, state: Dict, signal: str) -> float:
-        leg = "CE" if signal == "BUY_CE" else "PE"
-        legs = []
-        for row in (tick.option_chain or {}).values():
-            info = (row.get(leg) or {})
-            ltp = info.get("ltp")
-            if ltp is not None:
-                legs.append(float(ltp))
-        if not legs:
+        if not ce_legs or not pe_legs:
             return 0.0
-        avg_ltp = sum(legs) / len(legs)
+
+        avg_ce = sum(ce_legs) / len(ce_legs)
+        avg_pe = sum(pe_legs) / len(pe_legs)
         snap = state.setdefault("hero_zero_leg_avg_ltp", {})
-        prev = snap.get((tick.symbol, leg))
-        snap[(tick.symbol, leg)] = avg_ltp
-        if prev is None or prev <= 0:
+        prev_ce = float(snap.get((tick.symbol, "CE")) or 0.0)
+        prev_pe = float(snap.get((tick.symbol, "PE")) or 0.0)
+        snap[(tick.symbol, "CE")] = avg_ce
+        snap[(tick.symbol, "PE")] = avg_pe
+        if prev_ce <= 0.0 or prev_pe <= 0.0:
             return 0.0
-        delta = avg_ltp - float(prev)
-        if signal == "BUY_PE":
-            delta = max(0.0, delta)
-        else:
-            delta = max(0.0, delta)
-        return self.clamp(delta / max(1.0, float(prev) * 0.01))
 
+        delta_ce = avg_ce - prev_ce
+        delta_pe = avg_pe - prev_pe
+
+        if signal == "BUY_CE":
+            # Up move: CE premium should rise; reward CE>PE divergence.
+            directional = delta_ce - delta_pe
+            baseline = max(1.0, prev_ce * 0.01)
+        else:
+            # Down move: PE premium should rise; reward PE>CE divergence.
+            directional = delta_pe - delta_ce
+            baseline = max(1.0, prev_pe * 0.01)
+
+        if directional <= 0.0:
+            return 0.0
+        return self.clamp(directional / baseline)
