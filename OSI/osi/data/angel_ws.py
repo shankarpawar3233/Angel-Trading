@@ -310,7 +310,9 @@ class AngelWebSocketSource:
             max_age_ms = float(settings.ws_max_tick_age_ms)
             coarse_ts = exch_ts.microsecond == 0
             if coarse_ts:
-                max_age_ms = max(max_age_ms, 1500.0)
+                # Exchange timestamps often have second precision only; allow ~30s slack
+                # so pre-open / first-tick bursts are not falsely dropped as stale.
+                max_age_ms = max(max_age_ms, 30_000.0)
             if real_age_ms > max_age_ms:
                 logger.warning(
                     "Dropping stale tick symbol=%s real_latency_ms=%.2f max_ms=%.2f coarse_ts=%s",
@@ -405,19 +407,19 @@ class AngelWebSocketSource:
             self._sync_option_subscriptions(merged)
 
     def _select_option_tokens(self, symbol: str, atm: float) -> Dict[str, Tuple[int, str]]:
-        # Prefer today's expiry first for 0DTE; fallback chooses nearest available in instrument master.
-        preferred_expiry = datetime.now(timezone.utc).strftime("%d%b%Y").upper()
-        expiry = self._resolve_available_expiry(symbol, preferred_expiry)
+        preferred_expiry = self.expiry_engine.preferred_expiry_raw()
+        expiry, _ = self.expiry_engine.resolve_from_master(symbol, self._instrument_rows, preferred_expiry)
         if expiry != preferred_expiry:
             logger.info(
-                "Expiry fallback for %s preferred=%s resolved=%s",
+                "Expiry fallback for %s preferred=%s resolved=%s ymd=%s",
                 symbol,
                 preferred_expiry,
                 expiry,
+                self.expiry_engine.expiry_to_ymd(expiry),
             )
         step = 50.0 if symbol == "NIFTY" else 100.0
         strike_targets = [atm - step, atm, atm + step]
-        rows = [r for r in self._instrument_rows if self._match_option_row(r, symbol, expiry)]
+        rows = [r for r in self._instrument_rows if ExpiryEngine.match_option_row(r, symbol, expiry)]
         selected: Dict[str, Tuple[int, str]] = {}
         selected_meta: Dict[str, Dict[str, Any]] = {}
         for strike in strike_targets:
@@ -431,8 +433,8 @@ class AngelWebSocketSource:
                 ex = 2 if symbol == "NIFTY" else 4
                 selected[token] = (ex, token)
                 exp_raw = str(expiry or "").upper()
-                exp_ymd = self._expiry_to_yyyymmdd(exp_raw)
-                if not exp_ymd or self._is_expired_expiry(exp_ymd):
+                exp_ymd = self.expiry_engine.expiry_to_ymd(exp_raw)
+                if not exp_ymd or self.expiry_engine.is_expired(exp_ymd):
                     continue
                 selected_meta[token] = {
                     "symbol": symbol,
@@ -446,46 +448,6 @@ class AngelWebSocketSource:
         with self._lock:
             self._option_meta_by_token.update(selected_meta)
         return selected
-
-    def _resolve_available_expiry(self, symbol: str, preferred_expiry: str) -> str:
-        rows_for_symbol = [r for r in self._instrument_rows if self._match_option_row(r, symbol, preferred_expiry)]
-        if rows_for_symbol:
-            return preferred_expiry
-
-        candidates: List[tuple[datetime, str]] = []
-        for row in self._instrument_rows:
-            exch = str(row.get("exch_seg") or "").upper()
-            if symbol == "NIFTY" and exch != "NFO":
-                continue
-            if symbol == "SENSEX" and exch != "BFO":
-                continue
-            if str(row.get("instrumenttype") or "").upper() != "OPTIDX":
-                continue
-            name = str(row.get("name") or "").upper()
-            if symbol == "NIFTY" and name != "NIFTY":
-                continue
-            if symbol == "SENSEX" and name not in ("SENSEX", "SENSEX50"):
-                continue
-            sym = str(row.get("symbol") or "").upper()
-            if not sym.endswith(("CE", "PE")):
-                continue
-            exp = str(row.get("expiry") or "").strip().upper()
-            if not exp:
-                continue
-            try:
-                dt = datetime.strptime(exp, "%d%b%Y")
-            except ValueError:
-                continue
-            candidates.append((dt, exp))
-
-        if not candidates:
-            return preferred_expiry
-        today = date.today()
-        unique_sorted = sorted(set(candidates), key=lambda x: x[0])
-        future = [x for x in unique_sorted if x[0].date() >= today]
-        if future:
-            return future[0][1]
-        return unique_sorted[-1][1]
 
     def _build_index_tokens(self) -> Dict[str, Tuple[int, str]]:
         out: Dict[str, Tuple[int, str]] = {}
@@ -673,24 +635,6 @@ class AngelWebSocketSource:
         return out
 
     @staticmethod
-    def _expiry_to_yyyymmdd(expiry_raw: str) -> str:
-        txt = str(expiry_raw or "").strip().upper()
-        if not txt:
-            return ""
-        try:
-            return datetime.strptime(txt, "%d%b%Y").strftime("%Y%m%d")
-        except ValueError:
-            return ""
-
-    @staticmethod
-    def _is_expired_expiry(expiry_ymd: str) -> bool:
-        try:
-            exp = datetime.strptime(str(expiry_ymd), "%Y%m%d").date()
-        except ValueError:
-            return True
-        return exp < date.today()
-
-    @staticmethod
     def _extract_float(row: Dict[str, Any], keys: List[str]) -> float:
         for k in keys:
             if row.get(k) is None:
@@ -713,26 +657,6 @@ class AngelWebSocketSource:
         if 5000 <= v <= 100000:
             return v
         return v / 100.0
-
-    @staticmethod
-    def _match_option_row(row: Dict[str, Any], symbol: str, expiry: str) -> bool:
-        exch = str(row.get("exch_seg") or "").upper()
-        if symbol == "NIFTY" and exch != "NFO":
-            return False
-        if symbol == "SENSEX" and exch != "BFO":
-            return False
-        if str(row.get("instrumenttype") or "").upper() != "OPTIDX":
-            return False
-        name = str(row.get("name") or "").upper()
-        if symbol == "NIFTY" and name != "NIFTY":
-            return False
-        if symbol == "SENSEX" and name not in ("SENSEX", "SENSEX50"):
-            return False
-        exp = str(row.get("expiry") or "").strip().upper()
-        if exp != expiry:
-            return False
-        sym = str(row.get("symbol") or "").upper()
-        return sym.endswith("CE") or sym.endswith("PE")
 
     def _closest_contract(self, rows: List[Dict[str, Any]], strike: float, opt_type: str) -> Optional[Dict[str, Any]]:
         candidates = []

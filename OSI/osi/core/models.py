@@ -121,6 +121,9 @@ class DashboardSignalCard(BaseModel):
     entry_price: float
     stop_loss: float
     target_price: float
+    target_1: float = 0.0
+    target_2: float = 0.0
+    target_3: Optional[float] = None
     option_symbol: str
     strike: Optional[float] = None
     current_ltp: Optional[float] = None

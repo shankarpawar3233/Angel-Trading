@@ -64,7 +64,7 @@ class OptionMomentumService:
                 base = px
                 break
         current = hist[-1][1]
-        return max(0.0, current - base)
+        return current - base
 
     @staticmethod
     def _ts(ts: datetime) -> float:

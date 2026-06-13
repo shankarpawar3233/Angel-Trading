@@ -5,7 +5,9 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from osi.core.models import EngineOutput, MarketTick
+from osi.data.instrument_master import load_instruments
 from osi.engines.base import BaseEngine
+from osi.services.expiry_engine import ExpiryEngine
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +33,7 @@ class HeroZeroEngine(BaseEngine):
         if not chain:
             return EngineOutput(engine=self.name, signal="NONE", strength=0.0, confidence=0.0, reason="no_option_chain")
 
-        nearest_expiry = self._nearest_expiry(chain)
+        nearest_expiry = self._nearest_expiry(chain, tick.symbol)
         total_call_volume = 0.0
         total_put_volume = 0.0
         # tick.option_chain shape: {expiry_ymd: {strike: {"CE": {...}, "PE": {...}}}}
@@ -85,16 +87,10 @@ class HeroZeroEngine(BaseEngine):
         )
 
     @staticmethod
-    def _nearest_expiry(chain: Dict) -> str:
-        expiries = [str(k) for k in chain.keys() if k]
-        if not expiries:
+    def _nearest_expiry(chain: Dict, symbol: str) -> str:
+        if not chain:
             return ""
-        today_ymd = datetime.now(timezone.utc).strftime("%Y%m%d")
-        future = sorted(e for e in expiries if e >= today_ymd)
-        if future:
-            return future[0]
-        # No future expiries available; fall back to the lexicographically smallest.
-        return sorted(expiries)[0]
+        return ExpiryEngine().select_chain_expiry(symbol, list(chain.keys()), load_instruments())
 
     def _option_momentum_strength(
         self,

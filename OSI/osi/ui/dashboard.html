@@ -85,7 +85,7 @@
           <table>
             <thead>
               <tr>
-                <th>ID</th><th>Symbol</th><th>Signal</th><th>Trigger Engine</th><th>Strike</th><th>Option</th><th>Qty</th><th>Status</th><th>Entry</th><th>LTP</th><th>SL</th><th>T2</th><th>Exit</th><th>PnL</th>
+                <th>ID</th><th>Symbol</th><th>Signal</th><th>Trigger Engine</th><th>Strike</th><th>Option</th><th>Qty</th><th>Status</th><th>Entry</th><th>LTP</th><th>SL</th><th>T1</th><th>T2</th><th>T3</th><th>PnL</th>
               </tr>
             </thead>
             <tbody id="liveSignalsBody"></tbody>
@@ -100,7 +100,14 @@
       </div>
 
       <div class="card full">
-        <h3>2) Engine Performance (Core Insight)</h3>
+        <h3 style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <span>2) Engine Performance</span>
+          <span id="enginePerfScopeLabel" class="small" style="color:#9aa4b2;">(Today, IST)</span>
+          <span style="margin-left:auto;display:inline-flex;gap:6px;">
+            <button type="button" id="enginePerfScopeToday" class="small" style="padding:2px 8px;cursor:pointer;">Today</button>
+            <button type="button" id="enginePerfScopeAll" class="small" style="padding:2px 8px;cursor:pointer;">All-time</button>
+          </span>
+        </h3>
         <table>
           <thead>
             <tr>
@@ -139,46 +146,8 @@
         </div>
       </div>
 
-      <div class="card full">
-        <h3>3) Active Paper Positions</h3>
-        <div class="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>Time</th><th>Symbol</th><th>Signal</th><th>Trigger Engine</th><th>Strike</th><th>Option</th><th>Qty</th><th>Status</th><th>Entry</th><th>LTP</th><th>T2</th><th>Exit</th><th>PnL</th>
-              </tr>
-            </thead>
-            <tbody id="paperActiveBody"></tbody>
-          </table>
-        </div>
-      </div>
-
-      <div class="card full">
-        <h3>3b) Paper Signals (Raw Data)</h3>
-        <div class="toolbar">
-          <label class="small" for="paperFilter">Filter by Engine:</label>
-          <select id="paperFilter">
-            <option value="ALL">ALL</option>
-            <option value="intrabar_engine">intrabar_engine</option>
-            <option value="smart_breakout_engine">smart_breakout_engine</option>
-            <option value="mean_reversion_engine">mean_reversion_engine</option>
-            <option value="zero_hero_engine">zero_hero_engine</option>
-          </select>
-        </div>
-        <div class="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>ID</th><th>Symbol</th><th>Signal</th><th>Trigger Engine</th><th>Strike</th><th>Option</th><th>Qty</th><th>Status</th><th>Entry</th><th>LTP</th><th>SL</th><th>T2</th><th>PnL</th>
-              </tr>
-            </thead>
-            <tbody id="paperSignalsBody"></tbody>
-          </table>
-        </div>
-      </div>
-
       <div class="card span-8">
-        <h3>4) Rejected Signals (Debug)</h3>
+        <h3>3) Rejected Signals (Debug)</h3>
         <div class="table-scroll">
           <table>
             <thead>
@@ -199,7 +168,7 @@
       </div>
 
       <div class="card full">
-        <h3>5) System Health (Latency + WS)</h3>
+        <h3>4) System Health (Latency + WS)</h3>
         <div class="kpi" id="systemHealthKpi"></div>
       </div>
     </div>
@@ -208,9 +177,9 @@
   <script>
     const VISIBLE_ROWS = 15;
     const state = {
-      paperSignals: [],
       strategySignals: [],
       wsHealth: { reconnects: 0 },
+      enginePerfScope: "today",
       marketIndices: {
         NIFTY: { ltp: 0, change: 0, change_percent: 0, trend: "FLAT", ticks: [] },
         SENSEX: { ltp: 0, change: 0, change_percent: 0, trend: "FLAT", ticks: [] },
@@ -314,7 +283,7 @@
     function renderLiveSignals(rows) {
       const body = document.getElementById("liveSignalsBody");
       if (!rows.length) {
-        body.innerHTML = `<tr><td colspan="13" class="small">No live signals</td></tr>`;
+        body.innerHTML = `<tr><td colspan="15" class="small">No live signals</td></tr>`;
         return;
       }
       const sorted = sortByTimestampDesc(rows, "entry_time").slice(0, VISIBLE_ROWS);
@@ -331,7 +300,9 @@
           <td>${num(r.entry_price)}</td>
           <td>${num(r.current_ltp)}</td>
           <td>${num(r.stop_loss)}</td>
+          <td>${num(r.target_1)}</td>
           <td>${num(r.target_2 ?? r.target_price)}</td>
+          <td>${r.target_3 != null ? num(r.target_3) : "-"}</td>
           <td class="${pnlClass(livePnl(r))}">${num(livePnl(r))}</td>
         </tr>
       `).join("");
@@ -442,11 +413,6 @@
           `Score ${num(best.score)} | WR ${num(best.s.win_rate)}% | PnL ${num(best.s.total_pnl)} | DD ${num(best.s.max_drawdown)}`;
       }
     }
-    function renderPaperSignals(rows) {
-      state.paperSignals = (rows || []).filter(r => isTodayIst(r.timestamp));
-      renderPaperActivePositions(state.paperSignals);
-      applyPaperFilter();
-    }
     function renderStrategySignals(rows) {
       const body = document.getElementById("strategySignalsBody");
       state.strategySignals = (rows || []).filter(r => isTodayIst(r.timestamp));
@@ -470,85 +436,6 @@
           <td>${num(r.strength, 3)}</td>
           <td>${r.source || "-"}</td>
           <td>${r.reason || "-"}</td>
-        </tr>
-      `).join("");
-    }
-    function deriveActivePaperPositions(rows) {
-      const sorted = sortByTimestampDesc(rows || [], "timestamp");
-      const latestByKey = new Map();
-      for (const row of sorted) {
-        const symbol = String(row?.symbol || "");
-        const option = String(row?.option_symbol || "");
-        const engine = String(row?.engine || "");
-        if (!symbol || !option || !engine) continue;
-        const key = `${symbol}|${option}|${engine}`;
-        if (!latestByKey.has(key)) latestByKey.set(key, row);
-      }
-      return Array.from(latestByKey.values());
-    }
-    function paperPnl(row) {
-      const n = Number(row?.simulated_pnl);
-      if (!Number.isNaN(n)) return n;
-      const entry = Number(row?.entry_price || 0);
-      const ltp = Number(row?.current_ltp ?? row?.option_ltp ?? 0);
-      const qty = Number(row?.qty || 0);
-      if (entry <= 0 || ltp <= 0 || qty <= 0) return NaN;
-      const side = String(row?.signal || "");
-      const move = side === "BUY_PE" ? (entry - ltp) : (ltp - entry);
-      return move * qty;
-    }
-    function renderPaperActivePositions(rows) {
-      const body = document.getElementById("paperActiveBody");
-      const active = deriveActivePaperPositions(rows).slice(0, VISIBLE_ROWS);
-      if (!active.length) {
-        body.innerHTML = `<tr><td colspan="13" class="small">No active paper positions</td></tr>`;
-        return;
-      }
-      body.innerHTML = active.map(r => `
-        <tr>
-          <td>${fmtIst12(r.timestamp)}</td>
-          <td>${r.symbol || "-"}</td>
-          <td><span class="pill ${signalClass(r.signal)}">${r.signal || "-"}</span></td>
-          <td>${r.engine || "-"}</td>
-          <td>${r.strike ?? "-"}</td>
-          <td>${r.option_symbol || "-"}</td>
-          <td>${num(r.qty, 0)}</td>
-          <td>${r.status || "PAPER"}</td>
-          <td>${num(r.entry_price)}</td>
-          <td>${num(r.current_ltp ?? r.option_ltp)}</td>
-          <td>${num(r.paper_target)}</td>
-          <td>${num(r.paper_exit ?? r.current_ltp ?? r.option_ltp)}</td>
-          <td class="${pnlClass(paperPnl(r))}">${num(paperPnl(r))}</td>
-        </tr>
-      `).join("");
-    }
-    function applyPaperFilter() {
-      const filter = document.getElementById("paperFilter").value;
-      const body = document.getElementById("paperSignalsBody");
-      const rows = sortByTimestampDesc(
-        state.paperSignals.filter(r => filter === "ALL" ? true : r.engine === filter),
-        "timestamp"
-      ).slice(0, VISIBLE_ROWS);
-      if (!rows.length) {
-        body.innerHTML = `<tr><td colspan="14" class="small">No paper signals</td></tr>`;
-        return;
-      }
-      body.innerHTML = rows.map(r => `
-        <tr>
-          <td>${r.paper_id || "-"}</td>
-          <td>${r.symbol || "-"}</td>
-          <td><span class="pill ${signalClass(r.signal)}">${r.signal || "-"}</span></td>
-          <td>${r.engine || "-"}</td>
-          <td>${r.strike ?? "-"}</td>
-          <td>${r.option_symbol || "-"}</td>
-          <td>${num(r.qty, 0)}</td>
-          <td>${r.status || "PAPER"}</td>
-          <td>${num(r.entry_price)}</td>
-          <td>${num(r.current_ltp ?? r.option_ltp)}</td>
-          <td>-</td>
-          <td>${num(r.paper_target)}</td>
-          <td>${num(r.paper_exit ?? r.current_ltp ?? r.option_ltp)}</td>
-          <td class="${pnlClass(r.simulated_pnl)}">${num(r.simulated_pnl)}</td>
         </tr>
       `).join("");
     }
@@ -619,11 +506,10 @@
     }
     async function refreshAll() {
       try {
-        const [active, history, paperStats, paper, strategy, rejected, metrics, market] = await Promise.all([
+        const [active, history, engineStats, strategy, rejected, metrics, market] = await Promise.all([
           fetchJson("/signals/active"),
           fetchJson("/signals/history?limit=200"),
-          fetchJson("/signals/paper/stats"),
-          fetchJson("/signals/paper?limit=1000"),
+          fetchJson(`/signals/engine/stats?scope=${state.enginePerfScope || "today"}`),
           fetchJson("/signals/strategy?limit=1000"),
           fetchJson("/signals/rejected?limit=500"),
           fetchJson("/metrics"),
@@ -632,8 +518,7 @@
         updateMarketIndices(market || {});
         renderLiveSignals(active.active_signals || []);
         renderHistory(history.history || []);
-        renderEnginePerf(paperStats || {});
-        renderPaperSignals(paper.paper_signals || []);
+        renderEnginePerf(engineStats || {});
         renderStrategySignals(strategy.strategy_signals || []);
         renderRejected(rejected.rejected_signals || []);
         renderSystemHealth(metrics || {}, null);
@@ -660,15 +545,28 @@
           if (payload.market_indices) updateMarketIndices(payload.market_indices);
           if (payload.active_signals) renderLiveSignals(payload.active_signals);
           if (payload.history) renderHistory(payload.history);
-          if (payload.paper_signals) renderPaperSignals(payload.paper_signals);
           if (payload.strategy_signals) renderStrategySignals(payload.strategy_signals);
         } catch (err) {
           console.error("Bad WS payload", err);
         }
       };
     }
-    document.getElementById("paperFilter").addEventListener("change", applyPaperFilter);
-    refreshAll();
+    function setEnginePerfScope(scope) {
+      state.enginePerfScope = scope === "all" ? "all" : "today";
+      const label = document.getElementById("enginePerfScopeLabel");
+      if (label) label.textContent = state.enginePerfScope === "all" ? "(All-time)" : "(Today, IST)";
+      const btnT = document.getElementById("enginePerfScopeToday");
+      const btnA = document.getElementById("enginePerfScopeAll");
+      if (btnT && btnA) {
+        const isToday = state.enginePerfScope === "today";
+        btnT.style.opacity = isToday ? "1" : "0.55";
+        btnA.style.opacity = isToday ? "0.55" : "1";
+      }
+      refreshAll();
+    }
+    document.getElementById("enginePerfScopeToday")?.addEventListener("click", () => setEnginePerfScope("today"));
+    document.getElementById("enginePerfScopeAll")?.addEventListener("click", () => setEnginePerfScope("all"));
+    setEnginePerfScope("today");
     openLiveSocket();
     setInterval(refreshAll, 5000);
     setInterval(refreshIndices, 1000);

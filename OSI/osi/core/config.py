@@ -25,6 +25,19 @@ class OSISettings(BaseSettings):
     market_exit_time_ist: str = "15:30"
     daily_loss_cap: float = 3000.0
     max_consecutive_sl: int = 3
+    # Master switch for risk gates (daily loss cap + consecutive SL cap).
+    # When False, both gates are disabled regardless of the cap values above.
+    risk_gates_enabled: bool = True
+    # Allow same-direction signals to fire even while another active position exists
+    # for the same symbol (also bypasses flip protection / flip-flop guard).
+    allow_duplicate_active: bool = False
+    # Per-symbol cap on concurrent active positions.
+    max_active_per_symbol: int = 1
+    # Minimum gap between any two new signals on the same symbol.
+    cooldown_seconds: float = 120.0
+    # Flip-flop guard window (alternating direction protection). 0 = disabled.
+    flip_flop_seconds: float = 150.0
+    flip_flop_conf_gap: float = 12.0
     # Max premium notional per new trade (qty * option_ltp). 0 = disabled.
     max_trade_notional_rupees: float = 0.0
     # Throttle Redis writes on intrabar dashboard payloads (ms). 0 = no throttle.
@@ -47,6 +60,7 @@ class OSISettings(BaseSettings):
     ws_reconnect_max_backoff_sec: int = 60
     ws_heartbeat_stale_sec: int = 20
     ws_max_tick_age_ms: int = 1200
+    instrument_max_age_hours: float = 24.0
     option_data_stale_sec: float = 1.0
     scalping_entry_mode: str = "confirmed"  # aggressive | confirmed
     scalping_intrabar_momentum_sec: int = 5
@@ -78,6 +92,8 @@ class OSISettings(BaseSettings):
     telegram_screenshot_on_signal_update: bool = True
     telegram_screenshot_width: int = 1440
     telegram_screenshot_height: int = 900
+    telegram_live_ltp_enabled: bool = True
+    telegram_live_ltp_interval_sec: float = 30.0
 
 
 settings = OSISettings()

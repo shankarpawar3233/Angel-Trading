@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from json import JSONDecodeError
 import json
-from collections import deque
+from collections import defaultdict, deque
 from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -13,6 +13,7 @@ from uuid import uuid4
 from osi.core.config import settings
 from osi.core.market_phase import engine_weight, get_market_phase, is_no_trade_soft_zone
 from osi.core.models import ConsensusOutput, DashboardSignalCard, MarketTick, SignalRecord, SignalStatus
+from osi.data.instrument_master import load_instruments
 from osi.services.expiry_engine import ExpiryEngine
 from osi.services.option_momentum import OptionMomentumService
 
@@ -32,14 +33,16 @@ class SignalManager:
         self.history: List[SignalRecord] = []
         self.rejected_signals: List[Dict] = []
         self.paper_signals: List[Dict] = []
+        self._paper_positions: Dict[str, Dict] = {}
         self.max_history_records: int = 200
         self.last_generated_at: Dict[str, datetime] = {}
         self.last_signal_side: Dict[str, str] = {}
         self.last_signal_confidence: Dict[str, float] = {}
-        self.cooldown_seconds = 120
-        self.max_active_per_symbol = 1
-        self.flip_flop_seconds = 150
-        self.flip_flop_conf_gap = 12.0
+        self.cooldown_seconds = float(getattr(settings, "cooldown_seconds", 120.0))
+        self.max_active_per_symbol = int(getattr(settings, "max_active_per_symbol", 1))
+        self.flip_flop_seconds = float(getattr(settings, "flip_flop_seconds", 150.0))
+        self.flip_flop_conf_gap = float(getattr(settings, "flip_flop_conf_gap", 12.0))
+        self.allow_duplicate_active = bool(getattr(settings, "allow_duplicate_active", False))
         self.daily_realized_pnl: float = 0.0
         self.consecutive_sl_count: int = 0
         self._risk_day = datetime.now(timezone.utc).date().isoformat()
@@ -73,10 +76,11 @@ class SignalManager:
         self.last_decision_note: Dict[str, str] = {}
         self.last_confidence_breakdown: Dict[str, Dict[str, float]] = {}
         self._last_intrabar_fire_at: Dict[str, datetime] = {}
+        self._engine_metrics: Dict[str, Dict[str, int]] = defaultdict(
+            lambda: {"engine_seen": 0, "engine_selected": 0, "engine_executed": 0, "engine_wins": 0}
+        )
         self._market_range_hist: Dict[str, Deque[float]] = {"NIFTY": deque(maxlen=60), "SENSEX": deque(maxlen=60)}
         self.manual_pause: bool = False
-        self._paper_last_option_ltp: Dict[str, float] = {}
-        self._paper_positions: Dict[str, Dict] = {}
         self._load_storage()
 
     def process_consensus(self, tick: MarketTick, consensus: ConsensusOutput) -> Optional[SignalRecord]:
@@ -93,7 +97,7 @@ class SignalManager:
                 (
                     row
                     for row in consensus.engine_outputs
-                    if row.engine == "intrabar_engine" and row.signal != "NONE" and float(row.strength or 0.0) >= 0.7
+                    if row.engine == "intrabar_engine" and row.signal != "NONE" and float(row.strength or 0.0) >= 0.85
                 ),
                 None,
             )
@@ -144,6 +148,10 @@ class SignalManager:
         directional_strength = max(
             [float(row.strength) for row in consensus.engine_outputs if row.signal == consensus.signal] or [0.0]
         )
+        required_ticks = self._required_tick_confirmation(directional_strength)
+        selected_engine = str(consensus.selected_engine or lead_engine or "")
+        if consensus.signal in {"BUY_CE", "BUY_PE"} and selected_engine:
+            self._bump_engine_metric(selected_engine, "engine_selected")
         if (not hard_intrabar) and (not execution_only):
             if not self._mean_reversion_regime_allowed(
                 tick=tick,
@@ -259,7 +267,10 @@ class SignalManager:
 
         active = self._active_positions(tick.symbol)
         bypass_cooldown = False
-        if active:
+        # When allow_duplicate_active is True, the user wants every confident consensus
+        # to fire (including same-direction re-entries while a position is still open).
+        # In that case, skip the duplicate / flip-protection / flip-flop / max-active gates.
+        if active and not self.allow_duplicate_active:
             existing = active[0]
             if existing.signal == consensus.signal:
                 self.logger.debug(
@@ -272,18 +283,14 @@ class SignalManager:
             # Opposite side: controlled replacement (flip protection + tick confirmation).
             now_flip = datetime.now(timezone.utc)
             trade_age_sec = (now_flip - existing.entry_time).total_seconds() if existing.entry_time else 0.0
-            early_extreme = directional_strength >= float(self.flip_extreme_strength) and float(consensus.confidence) >= float(
+            immediate_flip = directional_strength >= float(self.flip_extreme_strength) and float(consensus.confidence) >= float(
                 self.flip_extreme_confidence
             )
-            strong_flip = (
-                directional_strength >= float(self.flip_min_strength) and float(consensus.confidence) >= float(self.flip_min_confidence)
-            ) or (
-                hard_intrabar
-                and directional_strength >= 0.7
-                and float(consensus.confidence) >= 50.0
+            strong_flip = directional_strength >= float(self.flip_min_strength) and float(consensus.confidence) >= float(
+                self.flip_min_confidence
             )
-            age_ok = trade_age_sec >= float(self.min_hold_seconds) or early_extreme
-            replacement_ok = streak_count >= int(self.tick_confirmation_required) and strong_flip and age_ok
+            age_ok = trade_age_sec >= float(self.min_hold_seconds) or immediate_flip
+            replacement_ok = immediate_flip or (streak_count >= required_ticks and strong_flip and age_ok)
             if replacement_ok:
                 latest_price = self._current_option_ltp(
                     tick=tick,
@@ -307,21 +314,23 @@ class SignalManager:
                     trade_age_sec,
                     directional_strength,
                     float(consensus.confidence),
-                    early_extreme,
+                    immediate_flip,
                 )
             else:
                 self.logger.info(
-                    "flip_blocked symbol=%s existing=%s incoming=%s streak=%s trade_age_sec=%.1f "
-                    "strength=%.3f conf=%.2f strong_flip=%s age_ok=%s",
+                    "flip_blocked symbol=%s existing=%s incoming=%s streak=%s required_ticks=%s trade_age_sec=%.1f "
+                    "strength=%.3f conf=%.2f strong_flip=%s age_ok=%s immediate_flip=%s",
                     tick.symbol,
                     existing.signal,
                     consensus.signal,
                     streak_count,
+                    required_ticks,
                     trade_age_sec,
                     directional_strength,
                     float(consensus.confidence),
                     strong_flip,
                     age_ok,
+                    immediate_flip,
                 )
                 self._mark_rejected(tick, consensus, "flip_protection", notes, self._empty_breakdown(base_confidence))
                 return None
@@ -330,40 +339,44 @@ class SignalManager:
         if (
             flat_symbol
             and consensus.signal in {"BUY_CE", "BUY_PE"}
-            and streak_count < int(self.tick_confirmation_required)
-            and not hard_intrabar
+            and streak_count < required_ticks
         ):
             self.logger.info(
-                "tick_confirmation_failed symbol=%s signal=%s streak=%s required=%s",
+                "tick_confirmation_failed symbol=%s signal=%s streak=%s required=%s strength=%.3f",
                 tick.symbol,
                 consensus.signal,
                 streak_count,
-                self.tick_confirmation_required,
+                required_ticks,
+                directional_strength,
             )
             self._mark_rejected(
                 tick,
                 consensus,
                 "tick_confirmation_failed",
-                notes=[f"same_direction_ticks={streak_count}", f"required={self.tick_confirmation_required}"],
+                notes=[f"same_direction_ticks={streak_count}", f"required={required_ticks}"],
                 breakdown=self._empty_breakdown(base_confidence),
             )
             return None
         if flat_symbol and consensus.signal in {"BUY_CE", "BUY_PE"}:
-            if streak_count >= int(self.tick_confirmation_required) or hard_intrabar:
+            if streak_count >= required_ticks:
                 self.logger.info(
-                    "tick_confirmation_passed symbol=%s signal=%s streak=%s hard_intrabar=%s",
+                    "tick_confirmation_passed symbol=%s signal=%s streak=%s required=%s strength=%.3f",
                     tick.symbol,
                     consensus.signal,
                     streak_count,
-                    hard_intrabar,
+                    required_ticks,
+                    directional_strength,
                 )
 
-        if (not bypass_cooldown) and self._in_cooldown(tick.symbol):
+        if (not bypass_cooldown) and self.cooldown_seconds > 0 and self._in_cooldown(tick.symbol):
             self.logger.debug("SIGNAL BLOCKED symbol=%s reason=cooldown", tick.symbol)
             self._mark_rejected(tick, consensus, "cooldown", notes, self._empty_breakdown(base_confidence))
             return None
 
-        if len(self._active_positions(tick.symbol)) >= self.max_active_per_symbol:
+        if (
+            not self.allow_duplicate_active
+            and len(self._active_positions(tick.symbol)) >= self.max_active_per_symbol
+        ):
             self.logger.debug("SIGNAL BLOCKED symbol=%s reason=max_active_limit", tick.symbol)
             self._mark_rejected(tick, consensus, "max_active_limit", notes, self._empty_breakdown(base_confidence))
             return None
@@ -372,8 +385,9 @@ class SignalManager:
         last_conf = self.last_signal_confidence.get(tick.symbol, 0.0)
         if (
             (not hard_intrabar)
-            and
-            last_side
+            and (not self.allow_duplicate_active)
+            and self.flip_flop_seconds > 0
+            and last_side
             and last_side != consensus.signal
             and self._recent_signal(tick.symbol, seconds=self.flip_flop_seconds)
             and abs(consensus.confidence - last_conf) < self.flip_flop_conf_gap
@@ -482,6 +496,17 @@ class SignalManager:
                 consensus,
                 "no_trade_zone_confidence",
                 notes=[*notes, "min_required=35"],
+                breakdown=breakdown,
+            )
+            return None
+
+        min_sig = float(getattr(settings, "min_signal_confidence", 0.0) or 0.0)
+        if min_sig > 0 and float(consensus.confidence) < min_sig:
+            self._mark_rejected(
+                tick,
+                consensus,
+                "below_min_signal_confidence",
+                notes=[f"final={float(consensus.confidence):.2f}", f"min_required={min_sig}"],
                 breakdown=breakdown,
             )
             return None
@@ -618,6 +643,7 @@ class SignalManager:
         if self.metrics is not None:
             self.metrics.record_signal_generated()
             self.metrics.record_signal_executed()
+        self._bump_engine_metric(lead_engine, "engine_executed")
         self.last_decision_note[tick.symbol] = f"allowed:{'|'.join(notes)}"
         return signal
 
@@ -887,15 +913,17 @@ class SignalManager:
         direction = consensus.signal
         if direction not in {"BUY_CE", "BUY_PE"}:
             return None
-        all_expiries = sorted((tick.option_chain or {}).keys())
-        if not all_expiries:
+        chain = tick.option_chain or {}
+        if not chain:
             return None
-        today_ymd = datetime.now(timezone.utc).strftime("%Y%m%d")
-        valid_expiries = [e for e in all_expiries if str(e) >= today_ymd]
-        if not valid_expiries:
+        expiry = self.expiry_engine.select_chain_expiry(
+            tick.symbol,
+            list(chain.keys()),
+            load_instruments(),
+        )
+        if not expiry:
             return None
-        expiry = valid_expiries[0]
-        by_strike = (tick.option_chain or {}).get(expiry) or {}
+        by_strike = chain.get(expiry) or {}
         strikes = sorted(float(k) for k in by_strike.keys())
         if not strikes:
             return None
@@ -912,7 +940,7 @@ class SignalManager:
         if ltp is None:
             return None
         option_ts = leg_row.get("option_timestamp")
-        if self._is_expired_expiry(expiry):
+        if self.expiry_engine.is_expired(expiry):
             return None
         option_symbol = f"{tick.symbol}_{expiry}_{int(strike)}_{leg}"
         try:
@@ -997,14 +1025,6 @@ class SignalManager:
         return parts[1] if len(parts) > 1 else ""
 
     @staticmethod
-    def _is_expired_expiry(expiry_ymd: str) -> bool:
-        try:
-            exp = datetime.strptime(str(expiry_ymd), "%Y%m%d").date()
-        except ValueError:
-            return True
-        return exp < datetime.now(timezone.utc).date()
-
-    @staticmethod
     def _strike_from_option_symbol(option_symbol: str) -> Optional[float]:
         try:
             return float(option_symbol.split("_")[2])
@@ -1035,9 +1055,27 @@ class SignalManager:
     @staticmethod
     def _is_hard_intrabar_override(consensus: ConsensusOutput) -> bool:
         for row in consensus.engine_outputs:
-            if row.engine == "intrabar_engine" and row.signal != "NONE" and float(row.strength or 0.0) >= 0.7:
+            if row.engine == "intrabar_engine" and row.signal != "NONE" and float(row.strength or 0.0) >= 0.85:
                 return True
         return False
+
+    @staticmethod
+    def _required_tick_confirmation(directional_strength: float) -> int:
+        if directional_strength >= 0.85:
+            return 1
+        if directional_strength >= 0.75:
+            return 2
+        return 3
+
+    def _bump_engine_metric(self, engine: str, metric_key: str) -> None:
+        name = str(engine or "").strip()
+        if not name:
+            return
+        bucket = self._engine_metrics[name]
+        bucket[metric_key] = int(bucket.get(metric_key, 0)) + 1
+
+    def engine_metrics_snapshot(self) -> Dict[str, Dict[str, int]]:
+        return {engine: dict(metrics) for engine, metrics in self._engine_metrics.items()}
 
     def _active_positions(self, symbol: str) -> List[SignalRecord]:
         return [
@@ -1053,6 +1091,10 @@ class SignalManager:
                 self.notifier.notify_signal_closed(signal)
             except Exception:
                 self.logger.exception("Telegram notify close failed")
+            try:
+                self.notifier.untrack_signal(signal.signal_id)
+            except Exception:
+                self.logger.exception("Telegram untrack signal failed")
         if self.metrics is not None:
             self.metrics.record_trade_close(
                 {
@@ -1065,6 +1107,8 @@ class SignalManager:
                     "closed_at": (signal.closed_at.isoformat() if signal.closed_at else datetime.now(timezone.utc).isoformat()),
                 }
             )
+        if float(signal.pnl or 0.0) > 0.0:
+            self._bump_engine_metric(str(signal.trigger_engine or ""), "engine_wins")
         if sl_hit:
             self.consecutive_sl_count += 1
         else:
@@ -1099,9 +1143,13 @@ class SignalManager:
             self.consecutive_sl_count = 0
 
     def _risk_blocked(self) -> bool:
-        if self.daily_realized_pnl <= -abs(float(settings.daily_loss_cap)):
+        if not bool(getattr(settings, "risk_gates_enabled", True)):
+            return False
+        cap = float(settings.daily_loss_cap)
+        if cap > 0 and self.daily_realized_pnl <= -abs(cap):
             return True
-        if self.consecutive_sl_count >= int(settings.max_consecutive_sl):
+        max_sl = int(settings.max_consecutive_sl)
+        if max_sl > 0 and self.consecutive_sl_count >= max_sl:
             return True
         return False
 
@@ -1114,6 +1162,7 @@ class SignalManager:
             "daily_loss_cap": float(settings.daily_loss_cap),
             "max_consecutive_sl": int(settings.max_consecutive_sl),
             "max_trade_notional_rupees": float(getattr(settings, "max_trade_notional_rupees", 0.0) or 0.0),
+            "engine_metrics": self.engine_metrics_snapshot(),
         }
 
     def _is_market_time_exit(self) -> bool:
@@ -1195,7 +1244,7 @@ class SignalManager:
             if not self.storage_path.exists():
                 self._persist_storage_if_due(force=True)
                 return
-            raw = json.loads(self.storage_path.read_text(encoding="utf-8"))
+            raw = json.loads(self.storage_path.read_text(encoding="utf-8-sig"))
         except (OSError, JSONDecodeError, ValueError):
             self.logger.exception("Failed to load signals storage, starting clean")
             raw = {"active_signals": [], "history": []}
@@ -1252,14 +1301,15 @@ class SignalManager:
                 self.rejected_signals.append(row)
         self.rejected_signals = self.rejected_signals[-self.max_history_records :]
         for row in raw.get("paper_signals", []):
-            if isinstance(row, dict) and str(row.get("symbol") or "") in self.enabled_symbols:
-                self.paper_signals.append(row)
-                key = f"{row.get('symbol')}|{row.get('engine')}|{row.get('option_symbol')}"
-                status = str(row.get("status") or "").upper()
-                if status == "PAPER_OPEN":
-                    self._paper_positions[key] = dict(row)
-                elif status == "PAPER_CLOSED" and key in self._paper_positions:
-                    self._paper_positions.pop(key, None)
+            if not isinstance(row, dict) or str(row.get("symbol") or "") not in self.enabled_symbols:
+                continue
+            self.paper_signals.append(row)
+            key = f"{row.get('symbol')}|{row.get('engine')}|{row.get('option_symbol')}"
+            status = str(row.get("status") or "").upper()
+            if status == "PAPER_OPEN":
+                self._paper_positions[key] = dict(row)
+            elif status == "PAPER_CLOSED":
+                self._paper_positions.pop(key, None)
         self.paper_signals = self.paper_signals[-self.max_history_records :]
 
     def snapshot_active_signals(self) -> List[Dict]:
@@ -1287,25 +1337,42 @@ class SignalManager:
         rows.sort(key=lambda r: str(r.get("timestamp") or ""), reverse=True)
         return rows
 
-    def paper_engine_stats(self) -> Dict[str, Dict[str, float]]:
+    def execution_engine_stats(self, scope: str = "today") -> Dict[str, Dict[str, float]]:
         tracked = {
             "intrabar": "intrabar_engine",
             "smart_breakout": "smart_breakout_engine",
             "mean_reversion": "mean_reversion_engine",
             "zero_hero": "zero_hero_engine",
         }
+
+        scope_norm = (scope or "today").strip().lower()
+        today_only = scope_norm == "today"
+        today_ist_key = self._ist_date_key(datetime.now(timezone.utc)) if today_only else None
+
         totals: Dict[str, int] = {k: 0 for k in tracked}
-        for row in self.paper_signals:
-            eng = str(row.get("engine") or "")
-            for key, engine_name in tracked.items():
-                if eng == engine_name:
-                    totals[key] += 1
+        for symbol in self.enabled_symbols:
+            for sig in self._active_positions(symbol):
+                engine_key = self._engine_bucket_from_signal(sig)
+                if engine_key not in totals:
+                    continue
+                if today_only:
+                    ref = sig.entry_time or sig.created_at
+                    if self._ist_date_key(ref) != today_ist_key:
+                        continue
+                totals[engine_key] += 1
 
         closed_by_engine: Dict[str, List[SignalRecord]] = {k: [] for k in tracked}
         for row in self.history:
+            if row.closed_at is None:
+                continue
             engine_key = self._engine_bucket_from_signal(row)
-            if engine_key in closed_by_engine and row.closed_at is not None:
-                closed_by_engine[engine_key].append(row)
+            if engine_key not in closed_by_engine:
+                continue
+            if today_only:
+                ref = row.closed_at or row.exit_time or row.created_at
+                if self._ist_date_key(ref) != today_ist_key:
+                    continue
+            closed_by_engine[engine_key].append(row)
 
         stats: Dict[str, Dict[str, float]] = {}
         for key in tracked:
@@ -1323,7 +1390,7 @@ class SignalManager:
             max_drawdown = self._max_drawdown(pnls)
             last_5_results = [("✔" if p > 0 else "❌" if p < 0 else "•") for p in pnls[-5:]]
             stats[key] = {
-                "total_signals": float(totals.get(key, 0)),
+                "total_signals": float(totals.get(key, 0) + len(closed)),
                 "wins": float(wins),
                 "losses": float(losses),
                 "win_rate": round(win_rate, 2),
@@ -1333,6 +1400,24 @@ class SignalManager:
                 "last_5_results": last_5_results,
             }
         return stats
+
+    @staticmethod
+    def _ist_date_key(value: Any) -> str:
+        """Return YYYY-MM-DD in IST for a datetime / ISO string. Empty string if unparseable."""
+        if value is None or value == "":
+            return ""
+        ist = timezone(timedelta(hours=5, minutes=30))
+        try:
+            if isinstance(value, datetime):
+                dt = value
+            else:
+                s = str(value).replace("Z", "+00:00")
+                dt = datetime.fromisoformat(s)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(ist).date().isoformat()
+        except Exception:
+            return ""
 
     @staticmethod
     def _max_drawdown(pnls: List[float]) -> float:
@@ -1369,12 +1454,11 @@ class SignalManager:
             if getattr(row, "signal", "NONE") == "NONE":
                 continue
             engine_name = str(getattr(row, "engine", "") or "")
+            self._bump_engine_metric(engine_name, "engine_seen")
             if engine_name == "mean_reversion_engine":
-                # User preference: keep strategy signal visibility, but skip paper trade simulation for mean reversion.
                 continue
             signal = str(getattr(row, "signal", "NONE") or "NONE")
-            strategy = self._strategy_name(engine_name)
-            contract = self._paper_option_contract_preview(
+            contract = self._option_contract_preview(
                 tick=tick,
                 signal=signal,
                 lead_engine=engine_name,
@@ -1388,26 +1472,16 @@ class SignalManager:
             strike = self._strike_from_option_symbol(option_symbol) if option_symbol else None
             expiry = self._expiry_from_option_symbol(option_symbol) if option_symbol else ""
             qty = self._execution_quantity_for_symbol(tick.symbol)
-            current_ltp: Optional[float] = None
-            paper_target: Optional[float] = None
-            paper_exit: Optional[float] = None
-            if option_symbol and option_ltp is not None:
-                current_ltp = round(float(option_ltp), 2)
-                paper_target = round(float(option_ltp) * 1.20, 2)
-                paper_exit = round(float(option_ltp), 2)
-            if (not option_symbol) or option_ltp is None:
-                continue
+            current_ltp = round(float(option_ltp), 2)
+            paper_target = round(float(option_ltp) * 1.20, 2)
+            paper_exit = current_ltp
             position_key = f"{tick.symbol}|{engine_name}|{option_symbol}"
             existing = self._paper_positions.get(position_key)
             if existing and str(existing.get("signal") or "") == signal:
                 existing["current_ltp"] = current_ltp
                 existing["timestamp"] = now
                 existing["paper_exit"] = paper_exit
-                move = (
-                    float(current_ltp) - float(existing.get("entry_price") or 0.0)
-                    if signal in {"BUY_CE", "BUY_PE"}
-                    else 0.0
-                )
+                move = current_ltp - float(existing.get("entry_price") or 0.0)
                 existing["simulated_pnl"] = round(move * float(existing.get("qty") or qty), 2)
                 existing["status"] = "PAPER_OPEN"
                 self.paper_signals.append(dict(existing))
@@ -1415,11 +1489,7 @@ class SignalManager:
             if existing:
                 exit_ltp = float(current_ltp)
                 prev_side = str(existing.get("signal") or "")
-                move = (
-                    exit_ltp - float(existing.get("entry_price") or 0.0)
-                    if prev_side in {"BUY_CE", "BUY_PE"}
-                    else 0.0
-                )
+                move = exit_ltp - float(existing.get("entry_price") or 0.0) if prev_side in {"BUY_CE", "BUY_PE"} else 0.0
                 closed = dict(existing)
                 closed["timestamp"] = now
                 closed["paper_exit"] = round(exit_ltp, 2)
@@ -1427,12 +1497,13 @@ class SignalManager:
                 closed["simulated_pnl"] = round(move * float(existing.get("qty") or qty), 2)
                 closed["status"] = "PAPER_CLOSED"
                 self.paper_signals.append(closed)
+                self._paper_positions.pop(position_key, None)
             opened = {
                 "paper_id": f"PAPER-{uuid4().hex[:10].upper()}",
                 "timestamp": now,
                 "symbol": tick.symbol,
                 "engine": engine_name,
-                "strategy": strategy,
+                "strategy": self._strategy_name(engine_name),
                 "signal": signal,
                 "strength": float(getattr(row, "strength", 0.0) or 0.0),
                 "confidence": float(getattr(row, "confidence", 0.0) or 0.0),
@@ -1443,12 +1514,12 @@ class SignalManager:
                 "strike": strike,
                 "option_symbol": option_symbol,
                 "expiry": expiry,
-                "option_ltp": round(float(option_ltp), 2),
+                "option_ltp": current_ltp,
                 "option_type": option_type,
                 "option_token": option_token,
                 "qty": float(qty),
                 "status": "PAPER_OPEN",
-                "entry_price": round(float(option_ltp), 2),
+                "entry_price": current_ltp,
                 "current_ltp": current_ltp,
                 "simulated_pnl": 0.0,
                 "paper_target": paper_target,
@@ -1459,7 +1530,7 @@ class SignalManager:
         self.paper_signals = self.paper_signals[-1000:]
         self._persist_storage_if_due()
 
-    def _paper_option_contract_preview(
+    def _option_contract_preview(
         self,
         *,
         tick: MarketTick,
@@ -1468,15 +1539,17 @@ class SignalManager:
     ) -> Optional[Dict[str, Any]]:
         if signal not in {"BUY_CE", "BUY_PE"}:
             return None
-        all_expiries = sorted((tick.option_chain or {}).keys())
-        if not all_expiries:
+        chain = tick.option_chain or {}
+        if not chain:
             return None
-        today_ymd = datetime.now(timezone.utc).strftime("%Y%m%d")
-        valid_expiries = [e for e in all_expiries if str(e) >= today_ymd]
-        if not valid_expiries:
+        expiry = self.expiry_engine.select_chain_expiry(
+            tick.symbol,
+            list(chain.keys()),
+            load_instruments(),
+        )
+        if not expiry:
             return None
-        expiry = valid_expiries[0]
-        by_strike = (tick.option_chain or {}).get(expiry) or {}
+        by_strike = chain.get(expiry) or {}
         strikes = sorted(float(k) for k in by_strike.keys())
         if not strikes:
             return None
@@ -1491,7 +1564,7 @@ class SignalManager:
         ltp = leg_row.get("ltp")
         if ltp is None:
             return None
-        if self._is_expired_expiry(expiry):
+        if self.expiry_engine.is_expired(expiry):
             return None
         option_symbol = f"{tick.symbol}_{expiry}_{int(strike)}_{leg}"
         return {
@@ -1765,6 +1838,9 @@ class SignalManager:
                         entry_price=sig.entry_price,
                         stop_loss=sig.stop_loss,
                         target_price=sig.target_price,
+                        target_1=float(sig.target_1 or 0.0),
+                        target_2=float(sig.target_2 or sig.target_price or 0.0),
+                        target_3=float(sig.target_3) if sig.target_3 is not None else None,
                         option_symbol=sig.option_symbol,
                         strike=sig.strike,
                         current_ltp=sig.current_ltp,

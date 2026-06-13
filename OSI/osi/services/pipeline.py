@@ -48,6 +48,7 @@ class OSIPipeline:
         self.tick_queue: asyncio.Queue[MarketTick] = asyncio.Queue(maxsize=10000)
         self.subscribers: List[asyncio.Queue[Dict[str, Any]]] = []
         self._worker_task: asyncio.Task | None = None
+        self._live_ltp_task: asyncio.Task | None = None
         self.candle_builder = CandleBuilder()
         self.decision_history: List[Dict[str, Any]] = []
         self._prev_candle: Dict[tuple[str, str], Dict[str, Any]] = {}
@@ -99,15 +100,48 @@ class OSIPipeline:
                 self.telegram_notifier.notify_active_snapshot(active)
             except Exception:
                 logger.exception("Telegram startup notification failed")
+        if self._live_ltp_task is None and bool(getattr(settings, "telegram_live_ltp_enabled", True)):
+            self._live_ltp_task = asyncio.create_task(self._live_ltp_loop())
 
-    async def stop(self) -> None:
+    async def stop(self, *, reason: str = "shutdown") -> None:
+        if self._live_ltp_task:
+            self._live_ltp_task.cancel()
+            try:
+                await self._live_ltp_task
+            except asyncio.CancelledError:
+                pass
+            self._live_ltp_task = None
         if self._worker_task:
             self._worker_task.cancel()
             try:
                 await self._worker_task
             except asyncio.CancelledError:
                 pass
+            self._worker_task = None
+        try:
+            self.telegram_notifier.notify_system_stopped(reason=reason)
+        except Exception:
+            logger.exception("Telegram stop notification failed")
         self.telegram_notifier.close()
+
+    async def _live_ltp_loop(self) -> None:
+        """Refresh sticky Telegram trackers for every active signal at a fixed cadence."""
+        interval = max(5.0, float(getattr(settings, "telegram_live_ltp_interval_sec", 30.0)))
+        try:
+            while True:
+                await asyncio.sleep(interval)
+                if not getattr(self.telegram_notifier, "enabled", False):
+                    continue
+                if not bool(getattr(settings, "telegram_live_ltp_enabled", True)):
+                    continue
+                try:
+                    for sym in self.signal_manager.enabled_symbols:
+                        for sig in self.signal_manager._active_positions(sym):
+                            self.telegram_notifier.update_signal_live(sig)
+                except Exception:
+                    logger.exception("Live LTP refresh failed")
+        except asyncio.CancelledError:
+            raise
 
     async def on_tick(self, tick: MarketTick) -> None:
         self.metrics.record_tick_received()
@@ -922,7 +956,7 @@ class OSIPipeline:
             if out.signal == "NONE":
                 continue
             confidence = OSIPipeline._normalized_strategy_confidence(out)
-            contract = self.signal_manager._paper_option_contract_preview(
+            contract = self.signal_manager._option_contract_preview(
                 tick=tick,
                 signal=str(out.signal),
                 lead_engine=str(out.engine),
@@ -1113,53 +1147,136 @@ class OSIPipeline:
         return "Commands: /status /active /pause /resume /snapshot"
 
     def _telegram_dashboard_summary(self) -> str:
+        """Render a rich live-state HTML summary used by /snapshot and startup."""
+        from html import escape as _h
+
+        from osi.core.market_phase import engine_weights_for_phase, get_market_phase
+
         ist = timezone(timedelta(hours=5, minutes=30))
-        today = datetime.now(ist).date().isoformat()
-        active_exec = self.signal_manager.snapshot_active_signals()
-        active_paper = self.signal_manager.active_paper_positions()
-        paper_rows = self.signal_manager.snapshot_paper_signals()
+        now_ist = datetime.now(ist)
+        today = now_ist.date().isoformat()
+        phase = get_market_phase(now_ist)
 
-        realized_today = 0.0
-        for row in paper_rows:
-            if str(row.get("status") or "").upper() != "PAPER_CLOSED":
-                continue
-            ts = str(row.get("timestamp") or "")
-            if not ts:
-                continue
-            try:
-                dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)
-                if dt.astimezone(ist).date().isoformat() != today:
-                    continue
-            except Exception:
-                continue
-            realized_today += float(row.get("simulated_pnl") or 0.0)
+        active_exec = []
+        for sym in self.signal_manager.enabled_symbols:
+            for sig in self.signal_manager._active_positions(sym):
+                active_exec.append(sig)
+        # Risk + execution P&L
+        risk = self.signal_manager.risk_snapshot()
+        exec_realized_today = float(risk.get("daily_realized_pnl") or 0.0)
+        exec_open_mtm = 0.0
+        for sig in active_exec:
+            entry = float(getattr(sig, "entry_price", 0.0) or 0.0)
+            ltp = float(getattr(sig, "current_ltp", None) or entry)
+            qty = float(getattr(sig, "remaining_qty", 1.0) or 1.0)
+            exec_open_mtm += (ltp - entry) * qty
 
-        open_mtm = sum(float(row.get("simulated_pnl") or 0.0) for row in active_paper)
-        total_today = realized_today + open_mtm
+        # Latency
+        m = self.metrics.snapshot() if self.metrics is not None else {}
+        avg_total = float(m.get("avg_total_signal_latency_ms") or 0.0)
+        last_total = float(m.get("total_signal_latency_ms") or 0.0)
+        engine_ms = m.get("engine_exec_ms") or {}
 
-        lines = [
-            "OSI DASHBOARD SUMMARY",
-            f"Date(IST): {today}",
-            f"Execution Active: {len(active_exec)}",
-            f"Paper Active: {len(active_paper)}",
-            f"Paper Realized Today: {realized_today:.2f}",
-            f"Paper Open MTM: {open_mtm:.2f}",
-            f"Paper Total Today: {total_today:.2f}",
-        ]
-        if active_paper:
-            lines.append("Active Paper Positions:")
-            for row in active_paper[:5]:
+        # Engine weights for current phase
+        weights = engine_weights_for_phase(phase)
+
+        def _arrow(v: float) -> str:
+            if v > 0:
+                return "🟢"
+            if v < 0:
+                return "🔴"
+            return "⚪"
+
+        lines: List[str] = []
+        lines.append("📡 <b>OSI SNAPSHOT</b>")
+        lines.append(
+            f"<i>{now_ist.strftime('%Y-%m-%d %H:%M:%S')} IST · phase {_h(phase)}"
+            f" · {'⏸ PAUSED' if self.execution_paused else '▶ RUNNING'}</i>"
+        )
+        lines.append("")
+
+        # --- Active execution positions
+        if active_exec:
+            lines.append(f"📊 <b>Active Trades: {len(active_exec)}</b>")
+            for sig in active_exec[:5]:
+                entry = float(getattr(sig, "entry_price", 0.0) or 0.0)
+                ltp = float(getattr(sig, "current_ltp", None) or entry)
+                pts = round(ltp - entry, 2)
+                pct = round((pts / entry * 100.0), 2) if entry else 0.0
+                t1 = float(getattr(sig, "target_1", 0.0) or 0.0)
+                t2 = float(getattr(sig, "target_2", 0.0) or 0.0)
+                t3 = float(getattr(sig, "target_3", 0.0) or 0.0)
+                sl = float(getattr(sig, "stop_loss", 0.0) or 0.0)
                 lines.append(
-                    f"- {row.get('symbol','-')} {row.get('signal','-')} {row.get('engine','-')} "
-                    f"| Entry {float(row.get('entry_price') or 0.0):.2f} "
-                    f"| LTP {float(row.get('current_ltp') or 0.0):.2f} "
-                    f"| PnL {float(row.get('simulated_pnl') or 0.0):.2f}"
+                    f"• <b>{_h(sig.symbol)}</b> {_h(str(sig.signal))} · {_h(sig.strategy)}"
                 )
-            if len(active_paper) > 5:
-                lines.append(f"... and {len(active_paper) - 5} more")
+                lines.append(
+                    f"   Entry <code>{entry:.2f}</code> · "
+                    f"LTP <code>{ltp:.2f}</code> {_arrow(pts)} "
+                    f"{pct:+.2f}% ({pts:+.2f})"
+                )
+                t_parts = [f"SL <code>{sl:.2f}</code>"]
+                if t1:
+                    t_parts.append(f"T1 <code>{t1:.2f}</code>")
+                if t2:
+                    t_parts.append(f"T2 <code>{t2:.2f}</code>")
+                if t3:
+                    t_parts.append(f"T3 <code>{t3:.2f}</code>")
+                lines.append("   " + " · ".join(t_parts))
+            if len(active_exec) > 5:
+                lines.append(f"   ... and <b>{len(active_exec) - 5}</b> more")
         else:
-            lines.append("Active Paper Positions: none")
+            lines.append("📊 <b>Active Trades:</b> none")
+        lines.append("")
+
+        # --- Today's P&L
+        total_exec = exec_realized_today + exec_open_mtm
+        lines.append("💰 <b>Today's P&amp;L</b>")
+        lines.append(
+            f"   Execution: realized <b>₹{exec_realized_today:+.2f}</b> · "
+            f"open MTM <b>₹{exec_open_mtm:+.2f}</b> · "
+            f"total {_arrow(total_exec)} <b>₹{total_exec:+.2f}</b>"
+        )
+        lines.append("")
+
+        # --- Risk
+        cap = float(risk.get("daily_loss_cap") or 0.0)
+        max_sl = int(risk.get("max_consecutive_sl") or 0)
+        max_notional = float(risk.get("max_trade_notional_rupees") or 0.0)
+        lines.append("🛡 <b>Risk</b>")
+        lines.append(
+            f"   Daily loss cap: <b>₹{cap:,.0f}</b> · "
+            f"used <b>₹{exec_realized_today:+.2f}</b>"
+        )
+        lines.append(
+            f"   Consecutive SL: <b>{int(risk.get('consecutive_sl_count') or 0)}/{max_sl}</b>"
+        )
+        if max_notional > 0:
+            lines.append(f"   Max notional/trade: <b>₹{max_notional:,.0f}</b>")
+        lines.append(
+            f"   Blocked: <b>{'YES' if bool(risk.get('risk_blocked')) else 'no'}</b>"
+        )
+        lines.append("")
+
+        # --- Latency
+        if avg_total or last_total:
+            lines.append("⚡ <b>Latency</b>")
+            lines.append(
+                f"   last <code>{last_total:.1f}ms</code> · "
+                f"avg <code>{avg_total:.1f}ms</code>"
+            )
+            if engine_ms:
+                items = ", ".join(
+                    f"{_h(str(k))} <code>{float(v):.1f}ms</code>"
+                    for k, v in list(engine_ms.items())[:5]
+                )
+                lines.append(f"   engines: {items}")
+            lines.append("")
+
+        # --- Engine weights for current phase
+        if weights:
+            lines.append("🤖 <b>Engine Weights</b>")
+            for eng, w in weights.items():
+                lines.append(f"   {_h(eng)}: <b>{float(w):.2f}</b>")
         return "\n".join(lines)
 

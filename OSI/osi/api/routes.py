@@ -38,14 +38,24 @@ def build_router(pipeline: OSIPipeline):
         rows = pipeline.signal_manager.snapshot_rejected()[-min(limit, 200) :]
         return {"rejected_signals": rows, "count": len(rows)}
 
+    @router.get("/signals/engine/stats")
+    async def get_signals_engine_stats(scope: str = "today") -> Dict:
+        scope_norm = (scope or "today").strip().lower()
+        if scope_norm not in ("today", "all"):
+            scope_norm = "today"
+        return pipeline.signal_manager.execution_engine_stats(scope=scope_norm)
+
     @router.get("/signals/paper")
     async def get_signals_paper(limit: int = 500) -> Dict:
         rows = pipeline.signal_manager.snapshot_paper_signals()[-min(limit, 1000) :]
         return {"paper_signals": rows, "count": len(rows)}
 
     @router.get("/signals/paper/stats")
-    async def get_signals_paper_stats() -> Dict:
-        return pipeline.signal_manager.paper_engine_stats()
+    async def get_signals_paper_stats(scope: str = "today") -> Dict:
+        scope_norm = (scope or "today").strip().lower()
+        if scope_norm not in ("today", "all"):
+            scope_norm = "today"
+        return pipeline.signal_manager.execution_engine_stats(scope=scope_norm)
 
     @router.get("/signals/strategy")
     async def get_signals_strategy(limit: int = 200) -> Dict:
